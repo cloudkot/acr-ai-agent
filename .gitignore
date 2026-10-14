@@ -1,3 +1,4 @@
+HEAD
 node_modules/
 dist/
 .vite/
@@ -16,3 +17,37 @@ venv/
 
 .DS_Store
 Thumbs.db
+
+# Node.js
+node_modules/
+dist/
+build/
+*.log
+npm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+env/
+.venv/
+*.egg-info/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# OS
+Thumbs.db
+
+# Кеши
+.cache/
+.vite/
+db9579c (Initial commit: frontend + backend structure)
