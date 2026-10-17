@@ -40,7 +40,7 @@ function App() {
       setLoading(false);
     }
   };
-
+  // [ТРЕБОВАНИЕ КЕЙСА: Human-in-the-loop — методист утверждает каркас перед генерацией контента]
   // --- Экран 2: Утверждение каркаса ---
   const handleApprove = async () => {
     setError(null);
@@ -57,6 +57,7 @@ function App() {
   };
 
   // --- Экран 3: Экспорт ---
+  // [ТРЕБОВАНИЕ КЕЙСА: экспорт в DOCX по шаблону АЦР]
   const handleExport = async () => {
     try {
       await exportToDocx(sessionId);
