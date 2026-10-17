@@ -1,247 +1,323 @@
-import { useState, useEffect, useRef } from 'react';
-import { api, type Artifacts } from './api';
-import { Send, FileUp, Download, Loader2, Bot, User, CheckCircle2 } from 'lucide-react';
-import { CompetenciesView, PlanView, TestsView, SeminarsView, SlidesView } from './components/ArtifactViews';
+import { useState } from 'react';
+import { Loader2, ArrowRight, CheckCircle2, Download, FileText, BookOpen, GraduationCap, RotateCcw } from 'lucide-react';
+import { 
+  generateFramework, 
+  approveFramework, 
+  exportToDocx,
+  type Framework,
+  type ContentResponse 
+} from './api';
+
+type Screen = 'input' | 'framework' | 'result';
 
 function App() {
-  const [messages, setMessages] = useState<{role: 'user'|'ai', text: string}[]>([
-    { role: 'ai', text: 'Привет! Я ИИ-агент для создания образовательных программ. Опишите, какую программу вам нужно разработать, и при необходимости загрузите референсы.' }
-  ]);
-  const [input, setInput] = useState('');
-  const [files, setFiles] = useState<File[]>([]);
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [status, setStatus] = useState<'idle'|'generating'|'done'>('idle');
-  const [currentStep, setCurrentStep] = useState<string>('');
-  const [artifacts, setArtifacts] = useState<Artifacts>({});
-  const [activeTab, setActiveTab] = useState<'competencies'|'plan'|'tests'|'seminars'|'slides'>('competencies');
+  const [screen, setScreen] = useState<Screen>('input');
+  const [topic, setTopic] = useState('');
+  const [hours, setHours] = useState<number>(72);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [sessionId, setSessionId] = useState<string>('');
+  const [framework, setFramework] = useState<Framework | null>(null);
+  const [content, setContent] = useState<ContentResponse['content'] | null>(null);
 
-  // Автоскролл чата
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  // Поллинг статуса
-  useEffect(() => {
-    let interval: any;
-    if (taskId && status === 'generating') {
-      interval = setInterval(async () => {
-        try {
-          const res = await api.getStatus(taskId);
-          setCurrentStep(res.current_step);
-          if (res.artifacts) setArtifacts(res.artifacts);
-          
-          if (res.status === 'completed') {
-            setStatus('done');
-            setMessages(prev => {
-   
-              const alreadyExists = prev.some(m => m.text.includes('Генерация завершена'));
-              if (alreadyExists) return prev;
-            return [...prev, { role: 'ai', text: 'Генерация завершена! Проверьте артефакты справа. Вы можете точечно доработать любой элемент.' }];
-          });
-          clearInterval(interval);
-        }
-        } catch (e) {
-          console.error(e);
-        }
-      }, 2000);
+  // --- Экран 1: Генерация каркаса ---
+  const handleGenerate = async () => {
+    if (!topic.trim() || hours <= 0) {
+      setError('Введите тему и количество часов');
+      return;
     }
-    return () => clearInterval(interval);
-  }, [taskId, status]);
-
-  const handleSend = async () => {
-    if (!input.trim() || status === 'generating') return;
-    
-    const userMessage = input;
-    setMessages(prev => [...prev, { role: 'user', text: userMessage }]);
-    setInput('');
-    setStatus('generating');
-    setCurrentStep('Инициализация...');
-    
+    setError(null);
+    setLoading(true);
     try {
-      // В реальном приложении здесь нужно извлекать часы и направление из текста, 
-      // либо добавлять отдельные поля в UI. Для хакатона хардкодим.
-      const res = await api.startGeneration(
-        { prompt: userMessage, hours: 72, direction: 'IT' }, 
-        files
-      );
-      setTaskId(res.task_id);
-      setMessages(prev => [...prev, { role: 'ai', text: 'Запускаю пайплайн генерации. Это может занять несколько минут...' }]);
+      const res = await generateFramework(topic, hours);
+      setSessionId(res.session_id);
+      setFramework(res.framework);
+      setScreen('framework');
     } catch (e) {
-      setStatus('idle');
-      setMessages(prev => [...prev, { role: 'ai', text: 'Ошибка запуска генерации. Проверьте бэкенд.' }]);
+      setError('Не удалось сгенерировать каркас. Проверьте бэкенд.');
+    } finally {
+      setLoading(false);
     }
   };
 
+  // --- Экран 2: Утверждение каркаса ---
+  const handleApprove = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await approveFramework(sessionId);
+      setContent(res.content);
+      setScreen('result');
+    } catch (e) {
+      setError('Не удалось сгенерировать контент.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // --- Экран 3: Экспорт ---
   const handleExport = async () => {
-    if (!taskId) return;
-    await api.exportDocx(taskId);
+    try {
+      await exportToDocx(sessionId);
+    } catch (e) {
+      setError('Не удалось скачать файл.');
+    }
   };
 
-  const handleRefine = async (itemId: string, instruction: string) => {
-    if (!taskId || !instruction.trim()) return;
-    setMessages(prev => [...prev, { role: 'user', text: `Правка для элемента ${itemId}: ${instruction}` }]);
-    await api.refineItem(taskId, activeTab, itemId, instruction);
-    setMessages(prev => [...prev, { role: 'ai', text: `Элемент обновлен!` }]);
-    // В реальном приложении здесь нужно обновить конкретный артефакт в стейте
+  // --- Перезапуск ---
+  const handleRestart = () => {
+    setScreen('input');
+    setTopic('');
+    setHours(72);
+    setSessionId('');
+    setFramework(null);
+    setContent(null);
+    setError(null);
   };
-
-  const steps = [
-    { id: 'analysis', label: 'Анализ' },
-    { id: 'competencies', label: 'Компетенции' },
-    { id: 'plan', label: 'План' },
-    { id: 'tests', label: 'Тесты' },
-    { id: 'slides', label: 'Слайды' },
-  ];
-
-  const currentStepIndex = steps.findIndex(s => currentStep.toLowerCase().includes(s.label.toLowerCase()));
 
   return (
-    <div className="flex h-screen bg-gray-50 text-gray-900 font-sans overflow-hidden">
-      
-      {/* ЛЕВАЯ КОЛОНКА: ЧАТ */}
-      <div className="w-1/3 flex flex-col border-r border-gray-200 bg-white shadow-sm z-10">
-        <div className="p-4 border-b bg-white flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
-            <Bot className="w-5 h-5 text-blue-600" />
-          </div>
-          <div>
-            <div className="font-bold text-sm">ИИ-Агент АЦР</div>
-            <div className="text-xs text-green-500 flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-green-500"></span> Online
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 text-gray-900">
+      {/* Шапка с прогрессом */}
+      <header className="bg-white border-b sticky top-0 z-10">
+        <div className="max-w-4xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold">
+                AI
+              </div>
+              <div>
+                <div className="font-bold text-sm">ACR AI Agent</div>
+                <div className="text-xs text-gray-500">Генератор программ</div>
+              </div>
             </div>
+            {screen !== 'input' && (
+              <button onClick={handleRestart} className="text-xs text-gray-500 hover:text-blue-600 flex items-center gap-1">
+                <RotateCcw className="w-3 h-3" /> Начать заново
+              </button>
+            )}
+          </div>
+
+          {/* Stepper */}
+          <div className="flex items-center mt-4 text-xs">
+            <Step num={1} label="Ввод" active={screen === 'input'} done={screen !== 'input'} />
+            <div className={`flex-1 h-0.5 mx-2 ${screen !== 'input' ? 'bg-green-500' : 'bg-gray-200'}`} />
+            <Step num={2} label="Каркас" active={screen === 'framework'} done={screen === 'result'} />
+            <div className={`flex-1 h-0.5 mx-2 ${screen === 'result' ? 'bg-green-500' : 'bg-gray-200'}`} />
+            <Step num={3} label="Результат" active={screen === 'result'} done={false} />
           </div>
         </div>
-        
-        {/* Лента сообщений */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50">
-          {messages.map((m, i) => (
-            <div key={i} className={`flex gap-3 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${m.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'}`}>
-                {m.role === 'user' ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
-              </div>
-              <div className={`p-3 rounded-lg max-w-[85%] text-sm ${m.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white border rounded-tl-none shadow-sm'}`}>
-                {m.text}
-              </div>
-            </div>
-          ))}
-          {status === 'generating' && (
-            <div className="flex gap-3">
-              <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center shrink-0">
-                <Bot className="w-4 h-4 text-gray-600" />
-              </div>
-              <div className="p-3 rounded-lg bg-white border rounded-tl-none shadow-sm flex items-center gap-2 text-sm text-blue-600">
-                <Loader2 className="animate-spin w-4 h-4" />
-                <span>Этап: {currentStep || 'Анализ...'}</span>
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
+      </header>
 
-        {/* Ввод */}
-        <div className="p-4 border-t bg-white space-y-3">
-          <label className="flex items-center gap-2 text-xs text-gray-500 cursor-pointer hover:text-blue-600 transition-colors bg-gray-50 p-2 rounded border border-dashed border-gray-300">
-            <FileUp className="w-4 h-4" />
-            <span>Прикрепить референсы (.docx, .pdf)</span>
-            <input type="file" multiple className="hidden" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
-          </label>
-          {files.length > 0 && (
-            <div className="text-xs text-green-600 bg-green-50 p-2 rounded flex items-center gap-1">
-              <CheckCircle2 className="w-3 h-3" /> Загружено файлов: {files.length}
-            </div>
-          )}
-          
-          <div className="flex gap-2">
-            <input 
-              value={input} 
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              placeholder="Опишите программу обучения..." 
-              className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50"
-              disabled={status === 'generating'}
-            />
-            <button 
-              onClick={handleSend} 
-              disabled={status === 'generating' || !input.trim()} 
-              className="bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
-            >
-              <Send className="w-5 h-5" />
-            </button>
+      {/* Ошибка */}
+      {error && (
+        <div className="max-w-4xl mx-auto mt-4 px-6">
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+            {error}
           </div>
         </div>
-      </div>
+      )}
 
-      {/* ЦЕНТРАЛЬНАЯ КОЛОНКА: АРТЕФАКТЫ */}
-      <div className="flex-1 flex flex-col bg-white">
-        
-        {/* Прогресс-бар (Stepper) */}
-        {status !== 'idle' && (
-          <div className="bg-white border-b px-6 py-3 flex items-center justify-between text-xs font-medium text-gray-500">
-            {steps.map((step, idx) => {
-              const isActive = idx === currentStepIndex;
-              const isDone = idx < currentStepIndex || status === 'done';
-              return (
-                <div key={step.id} className="flex items-center gap-2">
-                  <div className={`w-6 h-6 rounded-full flex items-center justify-center ${isDone ? 'bg-green-500 text-white' : isActive ? 'bg-blue-600 text-white animate-pulse' : 'bg-gray-200'}`}>
-                    {isDone ? <CheckCircle2 className="w-3 h-3" /> : idx + 1}
-                  </div>
-                  <span className={isActive || isDone ? 'text-gray-900' : ''}>{step.label}</span>
-                  {idx < steps.length - 1 && <div className={`w-8 h-0.5 ${isDone ? 'bg-green-500' : 'bg-gray-200'}`} />}
-                </div>
-              );
-            })}
-          </div>
-        )}
+      <main className="max-w-4xl mx-auto px-6 py-10">
+        {/* ЭКРАН 1: Ввод */}
+        {screen === 'input' && (
+          <div className="bg-white rounded-2xl shadow-sm border p-8 max-w-2xl mx-auto animate-fade-in-up">
+            <h1 className="text-3xl font-bold mb-2">Создайте программу обучения</h1>
+            <p className="text-gray-500 mb-8">Опишите тему и объём — ИИ сгенерирует каркас курса за 20 секунд</p>
 
-        {status === 'done' ? (
-          <>
-            {/* Шапка с табами и экспортом */}
-            <div className="p-4 border-b flex justify-between items-center bg-white sticky top-0 z-10">
-              <div className="flex gap-1 overflow-x-auto bg-gray-100 p-1 rounded-lg">
-                {[
-                  { id: 'competencies', label: 'Карта компетенций' },
-                  { id: 'plan', label: 'Учебный план' },
-                  { id: 'tests', label: 'Тесты' },
-                  { id: 'seminars', label: 'Семинары' },
-                  { id: 'slides', label: 'Слайды' }
-                ].map((tab) => (
-                  <button 
-                    key={tab.id} 
-                    onClick={() => setActiveTab(tab.id as any)}
-                    className={`px-4 py-1.5 text-sm rounded-md transition-all ${activeTab === tab.id ? 'bg-white text-blue-700 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-900'}`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
+            <div className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Тема программы
+                </label>
+                <input
+                  type="text"
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                  placeholder="Например: Python для начинающих"
+                  className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50"
+                  disabled={loading}
+                />
               </div>
-              <button onClick={handleExport} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700 shadow-sm transition-colors font-medium">
-                <Download className="w-4 h-4" /> Экспорт DOCX
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Объём (часы)
+                </label>
+                <input
+                  type="number"
+                  value={hours}
+                  onChange={(e) => setHours(Number(e.target.value))}
+                  min={16}
+                  max={500}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50"
+                  disabled={loading}
+                />
+                <p className="text-xs text-gray-500 mt-1">Рекомендуем от 16 до 500 часов</p>
+              </div>
+
+              <button
+                onClick={handleGenerate}
+                disabled={loading}
+                className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2 transition-colors"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Генерирую каркас... (до 20 сек)
+                  </>
+                ) : (
+                  <>
+                    Сгенерировать <ArrowRight className="w-5 h-5" />
+                  </>
+                )}
               </button>
             </div>
-
-            {/* Контент таба */}
-            <div className="flex-1 overflow-y-auto p-6 bg-gray-50">
-              <div className="max-w-5xl mx-auto">
-                {activeTab === 'competencies' && <CompetenciesView data={artifacts.competencies || []} />}
-                {activeTab === 'plan' && <PlanView data={artifacts.plan || []} />}
-                {activeTab === 'tests' && <TestsView data={artifacts.tests || []} taskId={taskId!} onRefine={handleRefine} />}
-                {activeTab === 'seminars' && <SeminarsView data={artifacts.seminars || []} />}
-                {activeTab === 'slides' && <SlidesView data={artifacts.slides || []} />}
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-gray-400 bg-gray-50">
-            <div className="w-20 h-20 bg-gray-200 rounded-full flex items-center justify-center mb-6">
-              <Bot className="w-10 h-10 text-gray-400" />
-            </div>
-            <h2 className="text-xl font-semibold text-gray-600 mb-2">Ожидание запроса</h2>
-            <p className="text-sm max-w-md text-center">Опишите требования к программе в чате слева, и агент сгенерирует полный комплект материалов.</p>
           </div>
         )}
+
+        {/* ЭКРАН 2: Каркас */}
+        {screen === 'framework' && framework && (
+          <div className="space-y-6 animate-fade-in-up">
+            {/* Цель */}
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 uppercase tracking-wide mb-2">
+                <GraduationCap className="w-4 h-4" /> Цель программы
+              </div>
+              <p className="text-lg text-gray-800">{framework.goal}</p>
+              <div className="mt-3 text-sm text-gray-500">
+                Всего часов: <span className="font-semibold text-gray-900">{framework.total_hours}</span>
+              </div>
+            </div>
+
+            {/* Модули */}
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 uppercase tracking-wide mb-4">
+                <BookOpen className="w-4 h-4" /> Модули программы
+              </div>
+              <div className="space-y-2">
+                {framework.modules.map((mod, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-sm font-bold">
+                        {i + 1}
+                      </div>
+                      <span className="font-medium">{mod.title}</span>
+                    </div>
+                    <span className="text-sm text-gray-600 font-semibold">{mod.hours} ч</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Компетенции */}
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 uppercase tracking-wide mb-4">
+                <CheckCircle2 className="w-4 h-4" /> Карта компетенций
+              </div>
+              <div className="space-y-3">
+                {framework.competencies.map((comp, i) => (
+                  <div key={i} className="p-4 border rounded-lg">
+                    <div className="font-semibold mb-2">{comp.name}</div>
+                    <div className="flex flex-wrap gap-2">
+                      {comp.knowledge.map((k, j) => (
+                        <span key={j} className="bg-blue-100 text-blue-800 px-2.5 py-1 rounded-full text-xs">
+                          {k}
+                        </span>
+                      ))}
+                      {comp.skills.map((s, j) => (
+                        <span key={`s${j}`} className="bg-green-100 text-green-800 px-2.5 py-1 rounded-full text-xs">
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Кнопка утверждения */}
+            <button
+              onClick={handleApprove}
+              disabled={loading}
+              className="w-full bg-green-600 text-white py-4 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2 transition-colors text-lg"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Генерирую тесты и семинары...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-5 h-5" /> Утвердить каркас и продолжить
+                </>
+              )}
+            </button>
+          </div>
+        )}
+
+        {/* ЭКРАН 3: Результат */}
+        {screen === 'result' && content && (
+          <div className="space-y-6 animate-fade-in-up">
+            <div className="bg-gradient-to-r from-green-50 to-blue-50 border border-green-200 rounded-2xl p-6">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-full bg-green-500 flex items-center justify-center">
+                  <CheckCircle2 className="w-7 h-7 text-white" />
+                </div>
+                <div>
+                  <div className="text-xl font-bold">Программа готова! 🎉</div>
+                  <div className="text-sm text-gray-600">Скачайте .docx или просмотрите материалы ниже</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Тесты */}
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 uppercase tracking-wide mb-3">
+                <FileText className="w-4 h-4" /> Тесты
+              </div>
+              <div className="whitespace-pre-wrap text-sm text-gray-800 bg-gray-50 p-4 rounded-lg max-h-96 overflow-y-auto">
+                {content.tests}
+              </div>
+            </div>
+
+            {/* Семинары */}
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 uppercase tracking-wide mb-3">
+                <FileText className="w-4 h-4" /> Семинары
+              </div>
+              <div className="whitespace-pre-wrap text-sm text-gray-800 bg-gray-50 p-4 rounded-lg max-h-96 overflow-y-auto">
+                {content.seminars}
+              </div>
+            </div>
+
+            {/* Кнопка экспорта */}
+            <button
+              onClick={handleExport}
+              className="w-full bg-blue-600 text-white py-4 rounded-lg font-medium hover:bg-blue-700 flex items-center justify-center gap-2 transition-colors text-lg"
+            >
+              <Download className="w-5 h-5" /> Скачать .docx
+            </button>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+// Маленький компонент шага
+function Step({ num, label, active, done }: { num: number; label: string; active: boolean; done: boolean }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className={`
+        w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all
+        ${done ? 'bg-green-500 text-white' : active ? 'bg-blue-600 text-white ring-4 ring-blue-100 animate-pulse' : 'bg-gray-200 text-gray-500'}
+      `}>
+        {done ? <CheckCircle2 className="w-4 h-4" /> : num}
       </div>
+      <span className={`font-medium ${active ? 'text-blue-600' : done ? 'text-green-600' : 'text-gray-400'}`}>
+        {label}
+      </span>
     </div>
   );
 }

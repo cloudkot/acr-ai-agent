@@ -1,104 +1,83 @@
-import axios from 'axios';
+// frontend/src/api.ts
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const BASE_URL = 'http://localhost:8000/api'; // или публичный URL ВМ
 
-export interface GenerateRequest {
-  prompt: string;
+// Типы, которые точно совпадают с Pydantic-схемами на бэкенде
+export interface Competency {
+  name: string;
+  knowledge: string[];
+  skills: string[];
+}
+
+export interface Module {
+  title: string;
   hours: number;
-  direction: string;
 }
 
-export interface Artifacts {
-  competencies?: any[];
-  plan?: any[];
-  tests?: any[];
-  seminars?: any[];
-  slides?: any[];
-  report?: any;
+export interface Framework {
+  goal: string;
+  competencies: Competency[];
+  modules: Module[];
+  total_hours: number;
 }
 
-// Флаг для тестирования без бэкенда
-const USE_MOCK = true; 
+export interface GenerateResponse {
+  session_id: string;
+  status: string;
+  message?: string;
+  framework: Framework;
+}
 
-export const api = {
-  startGeneration: async (data: GenerateRequest, files: File[]) => {
-    if (USE_MOCK) {
-      return new Promise(resolve => setTimeout(() => resolve({ task_id: 'mock-123' }), 1000));
-    }
-    const formData = new FormData();
-    formData.append('prompt', data.prompt);
-    formData.append('hours', data.hours.toString());
-    formData.append('direction', data.direction);
-    files.forEach((file) => formData.append('files', file));
+export interface ContentResponse {
+  session_id: string;
+  status: string;
+  content: {
+    tests: string;
+    seminars: string;
+    lectures: string;
+  };
+}
 
-    const response = await axios.post(`${API_URL}/api/generate`, formData);
-    return response.data;
-  },
+// 1. Проверка связи с LLM
+export async function testLLM() {
+  const res = await fetch(`${BASE_URL}/test-llm`);
+  return res.json();
+}
 
-  getStatus: async (taskId: string) => {
-    if (USE_MOCK) {
-      // Имитация пошаговой генерации
-      const steps = ['Анализ референсов', 'Генерация карты компетенций', 'Создание учебного плана', 'Генерация тестов', 'Создание слайдов'];
-      return new Promise(resolve => {
-        setTimeout(() => {
-          resolve({
-            status: 'completed',
-            current_step: 'Готово',
-            artifacts: {
-              competencies: [
-                { name: 'Основы Python', knowledge: ['Синтаксис', 'Типы данных'], skills: ['Писать скрипты'], abilities: ['Читать код'] },
-                { name: 'Работа с API', knowledge: ['REST', 'JSON'], skills: ['Отправлять запросы'], abilities: ['Интегрировать сервисы'] },
-              ],
-              plan: [
-                { module: 'Введение', lectures: 4, seminars: 4, self_study: 8 },
-                { module: 'Основы', lectures: 8, seminars: 8, self_study: 16 },
-              ],
-              tests: [
-                { question: 'Что такое Python?', options: ['Змея', 'Язык программирования', 'Игра'], correct_answer: 'Язык программирования' },
-                { question: 'Какой оператор используется для возведения в степень?', options: ['^', '**', '//'], correct_answer: '**' },
-              ],
-              seminars: [
-                { title: 'Установка окружения', criteria: 'Успешный запуск скрипта' }
-              ],
-              slides: [
-                { title: 'Введение в Python', content: 'История языка, области применения' }
-              ]
-            }
-          });
-        }, 3000);
-      });
-    }
-    const response = await axios.get(`${API_URL}/api/status/${taskId}`);
-    return response.data;
-  },
+// 2. Генерация каркаса (вызывать, когда методист ввел тему и часы)
+export async function generateFramework(topic: string, hours: number): Promise<GenerateResponse> {
+  const res = await fetch(`${BASE_URL}/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic, hours }),
+  });
+  if (!res.ok) throw new Error('Ошибка генерации каркаса');
+  return res.json();
+}
 
-  refineItem: async (taskId: string, artifactType: string, itemId: string, instruction: string) => {
-    if (USE_MOCK) {
-      return new Promise(resolve => setTimeout(() => resolve({ success: true }), 1000));
-    }
-    const response = await axios.post(`${API_URL}/api/refine`, {
-      task_id: taskId,
-      artifact_type: artifactType,
-      item_id: itemId,
-      instruction,
-    });
-    return response.data;
-  },
+// 3. Утверждение каркаса (Human-in-the-loop)
+export async function approveFramework(sessionId: string): Promise<ContentResponse> {
+  const res = await fetch(`${BASE_URL}/approve/${sessionId}`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error('Ошибка утверждения');
+  return res.json();
+}
 
-  exportDocx: async (taskId: string) => {
-    if (USE_MOCK) {
-      alert('В реальном приложении здесь начнется скачивание DOCX');
-      return;
-    }
-    const response = await axios.get(`${API_URL}/api/export/docx/${taskId}`, {
-      responseType: 'blob',
-    });
-    const url = window.URL.createObjectURL(new Blob([response.data]));
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `program_${taskId}.docx`);
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-  },
-};
+// 4. Экспорт в Word (возвращает файл, его нужно скачать)
+export async function exportToDocx(sessionId: string) {
+  const res = await fetch(`${BASE_URL}/export/${sessionId}`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error('Ошибка экспорта');
+  
+  // Скачивание файла
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `program_${sessionId.slice(0, 8)}.docx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
