@@ -1,16 +1,28 @@
-"""
-cloud.py - клиент Cloud.ru.
+import os
+from openai import OpenAI
 
-Обёртка над API Cloud.ru: Foundation Models, Managed RAG, Object Storage.
-Сюда же ложится авторизация через IAM-токен.
+# [ОГРАНИЧЕНИЕ КЕЙСА]: Использование инфраструктуры Cloud.ru (GigaSchool).
+# На ВМ переменные OPENAI_BASE_URL и OPENAI_API_KEY заданы системой.
+api_key = os.getenv("OPENAI_API_KEY", "")
+base_url = os.getenv("OPENAI_BASE_URL", "https://hub.gigaschool.ru/api/v1/llm/v1")
 
-Что будет внутри:
-    get_iam_token()        - обмен IAM-ключа на временный токен
-    chat_completion(...)   - вызов LLM через OpenAI-совместимый API
-                             base_url: https://foundation-models.api.cloud.ru/v1
-    rag_search(...)        - поиск по базе знаний через Managed RAG
-    upload_to_storage(...) - выгрузка артефактов в Object Storage
+client = OpenAI(api_key=api_key, base_url=base_url)
 
-Ключи читаются из .env (файл .env.example лежит в корне проекта).
-Реальные значения будут использоваться позже.
-"""
+# [АРХИТЕКТУРА]: LLM Router. Выбор модели под задачу.
+MODEL_FAST = "GigaChat/GigaChat-3-Pro"                    # Для простых задач
+MODEL_REASONING = "ai-sage/GigaChat3.5-432B-A28B-Reasoning" # Для сложной логики
+
+def ask_llm(prompt: str, model: str = MODEL_FAST) -> str:
+    """
+    [ОГРАНИЧЕНИЕ КЕЙСА]: Потоковая выдача (stream) не поддерживается шлюзом.
+    [ТРЕБОВАНИЕ КЕЙСА]: Материалы готовятся на русском языке.
+    """
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1500 # Для Reasoning-модели задаем запас токенов
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Ошибка LLM: {str(e)}"

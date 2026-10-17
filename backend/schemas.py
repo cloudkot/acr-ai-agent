@@ -1,17 +1,27 @@
-"""
-schemas.py — Pydantic-модели.
+from pydantic import BaseModel
+from typing import List
 
-Описывают структуру данных, которой обмениваются агенты и API.
-Одна из ключевых задач - жёстко зафиксировать схему, чтобы валидатор
-мог проверить каждый шаг до того, как результат уйдёт дальше.
+# [ТРЕБОВАНИЕ КЕЙСА]: Карта компетенций с разбивкой на знания, умения и навыки.
+class Competency(BaseModel):
+    name: str
+    knowledge: List[str]  # Знания
+    skills: List[str]     # Умения и навыки
 
-Основные модели:
-    SessionRequest    - запрос методиста и референсы
-    Framework         - каркас: цель, компетенции (ЗУН), учебный план
-    Competency        - компетенция с привязкой к темам и тестам
-    Module            - модуль с часами по видам работы
-    TestQuestion      - тестовый вопрос с ключом и привязкой к результату
-    SeminarTask       - задание для семинара с критериями оценки
-    ValidationReport  - отчёт автопроверки
-    ExportBundle      - итоговый комплект материалов
-"""
+# [ТРЕБОВАНИЕ КЕЙСА]: Учебный план с часами по модулям.
+class Module(BaseModel):
+    title: str
+    hours: int
+
+# [ТРЕБОВАНИЕ КЕЙСА]: Каркас программы (цель, компетенции, план, общий объем).
+class Framework(BaseModel):
+    goal: str
+    competencies: List[Competency]
+    modules: List[Module]
+    total_hours: int
+
+# [ТРЕБОВАНИЕ КЕЙСА]: Тестовые вопросы с привязкой к результатам обучения.
+class TestQuestion(BaseModel):
+    question: str
+    options: List[str]
+    correct_answer: str
+    related_competency: str # Привязка к компетенции

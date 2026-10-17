@@ -1,21 +1,7 @@
-# Веб
 fastapi
-uvicorn[standard]
-
-# Валидация и настройки
-pydantic
-pydantic-settings
-python-dotenv
-
-# HTTP-клиент для Cloud.ru
-httpx
-
-# OpenAI
+uvicorn
 openai
-
-# Экспорт документов
+pydantic
+python-dotenv
 python-docx
 python-pptx
-
-# Загрузка файлов от методиста
-python-multipart

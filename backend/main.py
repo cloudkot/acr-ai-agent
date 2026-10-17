@@ -1,19 +1,58 @@
-"""
-main.py — точка входа веб-сервиса.
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from agents.orchestrator import process_request, approve_and_generate, SESSIONS
+from export import export_to_docx
+from cloud import ask_llm
 
-Здесь поднимается FastAPI-приложение и объявляются HTTP-эндпоинты,
-через которые фронтенд общается с агентом.
+app = FastAPI(title="ACR AI Agent")
 
-Планируемые эндпоинты:
-    POST /sessions                 - создать сессию методиста, принять запрос и референсы
-    POST /sessions/{id}/clarify    - ответить на уточняющие вопросы агента
-    POST /sessions/{id}/framework  - сгенерировать каркас программы (цель, компетенции, часы)
-    POST /sessions/{id}/approve    - утвердить каркас, перейти к генерации содержания
-    POST /sessions/{id}/content    - сгенерировать полный комплект материалов
-    POST /sessions/{id}/revise     - точечная правка отдельной части
-    GET  /sessions/{id}/report     - отчёт автопроверки (часы, покрытие, источники)
-    POST /sessions/{id}/export     - выгрузка в .docx, .pptx, LMS, JSON
-    GET  /health                   - проверка живости сервиса
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-Реализация будет опираться на агентов из agents.py и клиент Cloud.ru из cloud.py.
-"""
+class GenerateReq(BaseModel):
+    topic: str
+    hours: int
+
+@app.get("/")
+def root():
+    return {"status": "ok", "team": "VlPKteam"}
+
+@app.get("/api/test-llm")
+def test_llm():
+    return {"llm_response": ask_llm("Скажи 'Привет'")}
+
+@app.post("/api/generate")
+def generate_framework_endpoint(req: GenerateReq):
+    """Шаг 1: Генерация каркаса."""
+    return process_request(req.topic, req.hours)
+
+@app.post("/api/approve/{session_id}")
+def approve_endpoint(session_id: str):
+    """Шаг 2: Утверждение каркаса и генерация контента."""
+    result = approve_and_generate(session_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+@app.post("/api/export/{session_id}")
+def export_endpoint(session_id: str):
+    """Шаг 3: Экспорт в .docx."""
+    if session_id not in SESSIONS:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+        
+    session = SESSIONS[session_id]
+    if session["status"] != "completed":
+        raise HTTPException(status_code=400, detail="Контент еще не сгенерирован (сначала утвердите каркас)")
+        
+    filename = export_to_docx(session["framework"], session["content"])
+    
+    return {
+        "status": "success",
+        "message": f"Файл {filename} успешно сгенерирован на сервере.",
+        "filename": filename
+    }
