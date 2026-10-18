@@ -1,9 +1,9 @@
 // frontend/src/api.ts
-// [ОГРАНИЧЕНИЕ КЕЙСА: облачная инфраструктура Cloud.ru]
-// Бэкенд использует LLM через Cloud.ru. Фронт обращается к нему по HTTP.
-const BASE_URL = 'http://localhost:8000/api'; // или публичный URL ВМ
 
-// Типы, которые точно совпадают с Pydantic-схемами на бэкенде
+// Для локальной разработки используй http://localhost:8000/api
+// Для деплоя на ВМ — публичный URL
+const BASE_URL = 'https://tochka-sborki-2026-team-058.hub.gigaschool.ru:8000/api';
+
 export interface Competency {
   name: string;
   knowledge: string[];
@@ -25,7 +25,6 @@ export interface Framework {
 export interface GenerateResponse {
   session_id: string;
   status: string;
-  message?: string;
   framework: Framework;
 }
 
@@ -39,13 +38,7 @@ export interface ContentResponse {
   };
 }
 
-// 1. Проверка связи с LLM
-export async function testLLM() {
-  const res = await fetch(`${BASE_URL}/test-llm`);
-  return res.json();
-}
-
-// 2. Генерация каркаса (вызывать, когда методист ввел тему и часы)
+// 1. Генерация каркаса
 export async function generateFramework(topic: string, hours: number): Promise<GenerateResponse> {
   const res = await fetch(`${BASE_URL}/generate`, {
     method: 'POST',
@@ -56,28 +49,33 @@ export async function generateFramework(topic: string, hours: number): Promise<G
   return res.json();
 }
 
-// 3. Утверждение каркаса (Human-in-the-loop)
-export async function approveFramework(sessionId: string): Promise<ContentResponse> {
-  const res = await fetch(`${BASE_URL}/approve/${sessionId}`, {
+// 2. Точечная доработка (реальная фича, которую надо добавить в UI)
+export async function reviseFramework(sessionId: string, instruction: string) {
+  const res = await fetch(`${BASE_URL}/revise/${sessionId}`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instruction }),
   });
+  if (!res.ok) throw new Error('Ошибка доработки');
+  return res.json();
+}
+
+// 3. Утверждение каркаса
+export async function approveFramework(sessionId: string): Promise<ContentResponse> {
+  const res = await fetch(`${BASE_URL}/approve/${sessionId}`, { method: 'POST' });
   if (!res.ok) throw new Error('Ошибка утверждения');
   return res.json();
 }
 
-// 4. Экспорт в Word (возвращает файл, его нужно скачать)
-export async function exportToDocx(sessionId: string) {
-  const res = await fetch(`${BASE_URL}/export/${sessionId}`, {
-    method: 'POST',
-  });
+// 4. Скачивание файлов (docx, pptx, lms)
+export async function downloadFile(sessionId: string, type: 'docx' | 'pptx' | 'lms') {
+  const res = await fetch(`${BASE_URL}/export-${type}/${sessionId}`, { method: 'POST' });
   if (!res.ok) throw new Error('Ошибка экспорта');
-  
-  // Скачивание файла
   const blob = await res.blob();
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `program_${sessionId.slice(0, 8)}.docx`;
+  a.download = `result_${sessionId.slice(0, 8)}.${type === 'lms' ? 'csv' : type}`;
   document.body.appendChild(a);
   a.click();
   a.remove();
