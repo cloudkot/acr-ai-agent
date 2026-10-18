@@ -6,6 +6,8 @@ from agents.orchestrator import process_request, approve_and_generate, revise_se
 from state_store import get_session, init_db
 from export import export_to_docx, export_to_pptx, export_tests_to_lms
 from cloud import ask_llm
+from fastapi import UploadFile, File
+from services.reference_parser import save_and_parse_reference
 
 app = FastAPI(title="ACR AI Agent")
 
@@ -78,3 +80,9 @@ def export_lms_endpoint(session_id: str):
     filename = f"tests_{session_id[:8]}.csv"
     export_tests_to_lms(session["content"].get("tests", []), filename)
     return FileResponse(path=filename, filename=filename, media_type="text/csv")
+
+@app.post("/api/upload-reference")
+async def upload_reference(file: UploadFile = File(...)):
+    """[ТРЕБОВАНИЕ КЕЙСА]: Загрузка референса (.docx/.txt)."""
+    text = await save_and_parse_reference(file)
+    return {"status": "success", "extracted_length": len(text), "text_preview": text[:200]}
