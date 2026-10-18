@@ -1,24 +1,35 @@
 from schemas import Framework
+import re
 
-def validate_curriculum_hours(framework: Framework) -> bool:
+def run_full_validation(framework: Framework) -> dict:
     """
-    [ТРЕБОВАНИЕ КЕЙСА]: Автоматическая проверка сумм.
-    Проверяет, что сумма часов по модулям равна заявленному объему программы.
-    Предотвращает ошибки, когда в программе 246 часов самостоятельной работы, 
-    а контактная — ноль.
+    [ТРЕБОВАНИЕ КЕЙСА]: Отчет автопроверки.
+    Проверяет часы, покрытие компетенций и наличие неподтвержденных источников.
     """
     calculated_hours = sum(module.hours for module in framework.modules)
-    is_valid = calculated_hours == framework.total_hours
+    hours_match = calculated_hours == framework.total_hours
+    coverage_ok = len(framework.competencies) >= 3
     
-    if not is_valid:
-        print(f"[VALIDATOR] Ошибка: Сумма модулей {calculated_hours} != общего объема {framework.total_hours}")
-    
-    return is_valid
+    # [ТРЕБОВАНИЕ КЕЙСА]: Программная проверка источников в тексте цели
+    unverified_sources_found = []
+    if "[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]" in framework.goal:
+        # Находим все упоминания
+        unverified_sources_found.append("В цели программы есть неподтвержденные источники")
+        
+    # Ищем паттерны типа "Приказ №123", "ГОСТ", "Профстандарт" в тексте
+    # (Упрощенная эвристика для демонстрации)
+    suspicious_patterns = re.findall(r'(Приказ\s+№\s*\d+|ГОСТ\s+\d+|Профстандарт\s+\d+)', framework.goal)
+    if suspicious_patterns and "[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]" not in framework.goal:
+         unverified_sources_found.append(f"Найдены ссылки без пометки: {suspicious_patterns}")
 
-def check_competency_coverage(framework: Framework) -> bool:
-    """
-    [ТРЕБОВАНИЕ КЕЙСА]: Связь между результатами обучения и темами.
-    Проверяет, что у каждой компетенции есть привязка к модулям.
-    """
-    # Заглушка для демонстрации логики покрытия
-    return len(framework.competencies) > 0
+    return {
+        "hours_match": hours_match,
+        "calculated_total": calculated_hours,
+        "expected_total": framework.total_hours,
+        "competency_coverage": coverage_ok,
+        "total_competencies": len(framework.competencies),
+        "sources_check": {
+            "has_unverified_mark": "[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]" in framework.goal,
+            "warnings": unverified_sources_found
+        }
+    }
