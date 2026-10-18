@@ -1,4 +1,6 @@
+import json
 from cloud import ask_llm, MODEL_REASONING
+from schemas import Framework
 
 def generate_framework_json(topic: str, hours: int, template_type: str = "ДПО") -> Framework:
     prompt = f"""
@@ -24,5 +26,33 @@ def generate_framework_json(topic: str, hours: int, template_type: str = "ДПО
     
     ВАЖНО: Сумма часов всех модулей ДОЛЖНА быть ровно {hours}. Верни ТОЛЬКО валидный JSON без markdown-разметки.
     """
-    # Используем Reasoning модель для сложной структурной логики
-    return ask_llm(prompt, model=MODEL_REASONING)
+    
+    response_text = ask_llm(prompt, model=MODEL_REASONING, is_json=True)
+    
+    if "```json" in response_text:
+        response_text = response_text.split("```json")[1].split("```")[0].strip()
+    elif "```" in response_text:
+        response_text = response_text.split("```")[1].split("```")[0].strip()
+        
+    data = json.loads(response_text)
+    return Framework(**data)
+
+def revise_framework_json(current_framework: Framework, instruction: str) -> Framework:
+    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка отдельной части."""
+    current_json = current_framework.model_dump_json(indent=2)
+    prompt = f"""
+    Ты — методист. Вот текущий учебный план в JSON:
+    {current_json}
+    
+    Внеси следующую правку: "{instruction}".
+    Измени только то, что просят. Остальное оставь без изменений. 
+    Верни ТОЛЬКО валидный JSON в том же формате. Сумма часов должна остаться прежней.
+    """
+    response_text = ask_llm(prompt, model=MODEL_REASONING, is_json=True)
+    if "```json" in response_text:
+        response_text = response_text.split("```json")[1].split("```")[0].strip()
+    elif "```" in response_text:
+        response_text = response_text.split("```")[1].split("```")[0].strip()
+    
+    data = json.loads(response_text)
+    return Framework(**data)

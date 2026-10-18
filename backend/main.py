@@ -59,6 +59,15 @@ def export_endpoint(session_id: str):
         "filename": filename
     }
 
+    class RevisionReq(BaseModel):
+    instruction: str
+
+@app.post("/api/revise/{session_id}")
+def revise_endpoint(session_id: str, req: RevisionReq):
+    from agents.orchestrator import revise_session
+    return revise_session(session_id, req.instruction)
+
+
 @app.post("/api/export-pptx/{session_id}")
 def export_pptx_endpoint(session_id: str):
     if session_id not in SESSIONS:
