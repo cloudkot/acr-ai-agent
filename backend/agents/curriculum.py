@@ -1,6 +1,8 @@
 import json
 from cloud import ask_llm, MODEL_REASONING
 from schemas import Framework
+from utils.json_parser import extract_json_from_text
+
 
 def generate_framework_json(topic: str, hours: int, template_type: str = "ДПО") -> Framework:
     prompt = f"""
@@ -27,14 +29,9 @@ def generate_framework_json(topic: str, hours: int, template_type: str = "ДПО
     ВАЖНО: Сумма часов всех модулей ДОЛЖНА быть ровно {hours}. Верни ТОЛЬКО валидный JSON без markdown-разметки.
     """
     
-    response_text = ask_llm(prompt, model=MODEL_REASONING, is_json=True)
+    response_text = ask_llm(prompt, task_type="framework", is_json=True)
     
-    if "```json" in response_text:
-        response_text = response_text.split("```json")[1].split("```")[0].strip()
-    elif "```" in response_text:
-        response_text = response_text.split("```")[1].split("```")[0].strip()
-        
-    data = json.loads(response_text)
+    data = extract_json_from_text(response_text) 
     return Framework(**data)
 
 def revise_framework_json(current_framework: Framework, instruction: str) -> Framework:
