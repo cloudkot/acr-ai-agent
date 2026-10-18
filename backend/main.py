@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -6,83 +6,51 @@ from agents.orchestrator import process_request, approve_and_generate, revise_se
 from state_store import get_session, init_db
 from export import export_to_docx, export_to_pptx, export_tests_to_lms
 from cloud import ask_llm
-from fastapi import UploadFile, File
 from services.reference_parser import save_and_parse_reference
 
 app = FastAPI(title="ACR AI Agent")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# [ТРЕБОВАНИЕ КЕЙСА]: Инициализация персистентного State Store
 @app.on_event("startup")
-def startup_event():
-    init_db()
+def startup_event(): init_db()
 
-class GenerateReq(BaseModel):
-    topic: str
-    hours: int
-
-class RevisionReq(BaseModel):
-    instruction: str
+class GenerateReq(BaseModel): topic: str; hours: int
+class RevisionReq(BaseModel): instruction: str
 
 @app.get("/")
-def root():
-    return {"status": "ok", "team": "VlPKteam"}
-
-@app.get("/api/test-llm")
-def test_llm():
-    response = ask_llm("Скажи 'Привет'")
-    return {"llm_response": response}
+def root(): return {"status": "ok"}
 
 @app.post("/api/generate")
-def generate_framework_endpoint(req: GenerateReq):
-    """Шаг 1: Генерация каркаса."""
-    return process_request(req.topic, req.hours)
-
-@app.post("/api/revise/{session_id}")
-def revise_endpoint(session_id: str, req: RevisionReq):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка без пересборки."""
-    return revise_session(session_id, req.instruction)
+def gen(req: GenerateReq): return process_request(req.topic, req.hours)
 
 @app.post("/api/approve/{session_id}")
-def approve_endpoint(session_id: str):
-    """Шаг 2: Утверждение каркаса и генерация контента."""
-    return approve_and_generate(session_id)
+def appr(session_id: str): return approve_and_generate(session_id)
 
-@app.post("/api/export-docx/{session_id}")
-def export_docx_endpoint(session_id: str):
-    session = get_session(session_id)
-    if not session or session["status"] != "completed":
-        raise HTTPException(status_code=400, detail="Сессия не готова")
-    filename = f"program_{session_id[:8]}.docx"
-    export_to_docx(session["framework"], session["content"], filename)
-    return FileResponse(path=filename, filename=filename, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-
-@app.post("/api/export-pptx/{session_id}")
-def export_pptx_endpoint(session_id: str):
-    session = get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Сессия не найдена")
-    filename = f"presentation_{session_id[:8]}.pptx"
-    export_to_pptx(session["framework"], filename)
-    return FileResponse(path=filename, filename=filename, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
-
-@app.post("/api/export-lms/{session_id}")
-def export_lms_endpoint(session_id: str):
-    session = get_session(session_id)
-    if not session or not session["content"]:
-        raise HTTPException(status_code=400, detail="Контент не сгенерирован")
-    filename = f"tests_{session_id[:8]}.csv"
-    export_tests_to_lms(session["content"].get("tests", []), filename)
-    return FileResponse(path=filename, filename=filename, media_type="text/csv")
+@app.post("/api/revise/{session_id}")
+def rev(session_id: str, req: RevisionReq): return revise_session(session_id, req.instruction)
 
 @app.post("/api/upload-reference")
-async def upload_reference(file: UploadFile = File(...)):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Загрузка референса (.docx/.txt)."""
+async def up_ref(file: UploadFile = File(...)):
     text = await save_and_parse_reference(file)
-    return {"status": "success", "extracted_length": len(text), "text_preview": text[:200]}
+    return {"status": "ok", "preview": text[:100]}
+
+@app.post("/api/export-docx/{session_id}")
+def exp_docx(session_id: str):
+    s = get_session(session_id)
+    if not s or s["status"] != "completed": raise HTTPException(400)
+    fn = f"program_{session_id[:8]}.docx"; export_to_docx(s["framework"], s["content"], fn)
+    return FileResponse(fn, filename=fn)
+
+@app.post("/api/export-pptx/{session_id}")
+def exp_pptx(session_id: str):
+    s = get_session(session_id)
+    if not s: raise HTTPException(404)
+    fn = f"presentation_{session_id[:8]}.pptx"; export_to_pptx(s["framework"], fn)
+    return FileResponse(fn, filename=fn)
+
+@app.post("/api/export-lms/{session_id}")
+def exp_lms(session_id: str):
+    s = get_session(session_id)
+    if not s or not s["content"]: raise HTTPException(400)
+    fn = f"tests_{session_id[:8]}.csv"; export_tests_to_lms(s["content"].get("tests", []), fn)
+    return FileResponse(fn, filename=fn)

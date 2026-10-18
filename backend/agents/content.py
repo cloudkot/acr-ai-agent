@@ -69,3 +69,5 @@ def generate_content_pack(framework: Framework) -> dict:
         "seminars": seminars,
         "lectures": lectures
     }
+
+    
