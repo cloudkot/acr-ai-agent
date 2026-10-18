@@ -1,11 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from agents.orchestrator import process_request, approve_and_generate, SESSIONS
-from export import export_to_docx
-from cloud import ask_llm
-from export import export_to_docx, export_to_pptx
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from agents.orchestrator import process_request, approve_and_generate, revise_session
+from state_store import get_session, init_db
+from export import export_to_docx, export_to_pptx, export_tests_to_lms
+from cloud import ask_llm
 
 app = FastAPI(title="ACR AI Agent")
 
@@ -16,9 +16,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# [ТРЕБОВАНИЕ КЕЙСА]: Инициализация персистентного State Store
+@app.on_event("startup")
+def startup_event():
+    init_db()
+
 class GenerateReq(BaseModel):
     topic: str
     hours: int
+
+class RevisionReq(BaseModel):
+    instruction: str
 
 @app.get("/")
 def root():
@@ -26,60 +34,47 @@ def root():
 
 @app.get("/api/test-llm")
 def test_llm():
-    return {"llm_response": ask_llm("Скажи 'Привет'")}
+    response = ask_llm("Скажи 'Привет'")
+    return {"llm_response": response}
 
 @app.post("/api/generate")
 def generate_framework_endpoint(req: GenerateReq):
     """Шаг 1: Генерация каркаса."""
     return process_request(req.topic, req.hours)
 
+@app.post("/api/revise/{session_id}")
+def revise_endpoint(session_id: str, req: RevisionReq):
+    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка без пересборки."""
+    return revise_session(session_id, req.instruction)
+
 @app.post("/api/approve/{session_id}")
 def approve_endpoint(session_id: str):
     """Шаг 2: Утверждение каркаса и генерация контента."""
-    result = approve_and_generate(session_id)
-    if "error" in result:
-        raise HTTPException(status_code=404, detail=result["error"])
-    return result
+    return approve_and_generate(session_id)
 
-@app.post("/api/export/{session_id}")
-def export_endpoint(session_id: str):
-    """Шаг 3: Экспорт в .docx."""
-    if session_id not in SESSIONS:
-        raise HTTPException(status_code=404, detail="Сессия не найдена")
-        
-    session = SESSIONS[session_id]
-    if session["status"] != "completed":
-        raise HTTPException(status_code=400, detail="Контент еще не сгенерирован (сначала утвердите каркас)")
-        
-    filename = export_to_docx(session["framework"], session["content"])
-    
-    return {
-        "status": "success",
-        "message": f"Файл {filename} успешно сгенерирован на сервере.",
-        "filename": filename
-    }
-
-    class RevisionReq(BaseModel):
-    instruction: str
-
-@app.post("/api/revise/{session_id}")
-def revise_endpoint(session_id: str, req: RevisionReq):
-    from agents.orchestrator import revise_session
-    return revise_session(session_id, req.instruction)
-
+@app.post("/api/export-docx/{session_id}")
+def export_docx_endpoint(session_id: str):
+    session = get_session(session_id)
+    if not session or session["status"] != "completed":
+        raise HTTPException(status_code=400, detail="Сессия не готова")
+    filename = f"program_{session_id[:8]}.docx"
+    export_to_docx(session["framework"], session["content"], filename)
+    return FileResponse(path=filename, filename=filename, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 @app.post("/api/export-pptx/{session_id}")
 def export_pptx_endpoint(session_id: str):
-    if session_id not in SESSIONS:
+    session = get_session(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
-    
-    session = SESSIONS[session_id]
     filename = f"presentation_{session_id[:8]}.pptx"
-    
     export_to_pptx(session["framework"], filename)
-    
-    return FileResponse(
-        path=filename, 
-        filename=filename, 
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-    )
+    return FileResponse(path=filename, filename=filename, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+
+@app.post("/api/export-lms/{session_id}")
+def export_lms_endpoint(session_id: str):
+    session = get_session(session_id)
+    if not session or not session["content"]:
+        raise HTTPException(status_code=400, detail="Контент не сгенерирован")
+    filename = f"tests_{session_id[:8]}.csv"
+    export_tests_to_lms(session["content"].get("tests", []), filename)
+    return FileResponse(path=filename, filename=filename, media_type="text/csv")
