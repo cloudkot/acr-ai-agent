@@ -4,28 +4,24 @@ from utils.json_parser import extract_json_from_text
 from services.rag_service import search_knowledge_base
 
 def generate_framework_json(topic: str, hours: int, template_type: str = "ДПО") -> Framework:
-    """
-    [АРХИТЕКТУРА]: Curriculum Architect.
-    [ТРЕБОВАНИЕ КЕЙСА]: Поддержка двух шаблонов АЦР и любого объема часов.
-    """
-    # [ТРЕБОВАНИЕ КЕЙСА]: Поиск по базе знаний (RAG)
-    rag_context = search_knowledge_base(topic)
+    # [ТРЕБОВАНИЕ КЕЙСА]: Вызов RAG с учетом типа программы
+    rag_context = search_knowledge_base(topic, template_type)
     
     prompt = f"""
     Ты — методист Академии цифрового развития.
     Тип программы: {template_type}. Тема: {topic}. Объем: {hours} часов.
     
-    ИСПОЛЬЗУЙ ЭТУ НОРМАТИВНУЮ БАЗУ (RAG):
+    ОБЯЗАТЕЛЬНАЯ НОРМАТИВНАЯ БАЗА (Используй её в поле "goal"):
     {rag_context}
     
     ОБЯЗАТЕЛЬНЫЕ ТРЕБОВАНИЯ:
-    1. Опирайся на 273-ФЗ и приказ Минобрнауки № 499 (для ДПО) или приказ № 629 (для общеразвивающих).
-    2. Если ты приводишь источник или профстандарт, и не уверен в его существовании, ОБЯЗАТЕЛЬНО пиши в начале строки "[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]".
+    1. В поле "goal" обязательно укажи, что программа составлена в соответствии с 273-ФЗ и соответствующим приказом.
+    2. Если ты приводишь профстандарт и не уверен в его существовании, пиши "[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]".
     
     Составь каркас программы в формате строгого JSON. 
     Формат JSON:
     {{
-        "goal": "строка",
+        "goal": "строка (с нормативной базой)",
         "competencies": [
             {{"name": "строка", "knowledge": ["строка"], "skills": ["строка"]}}
         ],
@@ -35,7 +31,7 @@ def generate_framework_json(topic: str, hours: int, template_type: str = "ДПО
         "total_hours": {hours}
     }}
     
-    ВАЖНО: Сумма часов всех модулей ДОЛЖНА быть ровно {hours}. Верни ТОЛЬКО валидный JSON без markdown-разметки.
+    ВАЖНО: Сумма часов всех модулей ДОЛЖНА быть ровно {hours}. Верни ТОЛЬКО валидный JSON.
     """
     
     response_text = ask_llm(prompt, task_type="framework", is_json=True)

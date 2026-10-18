@@ -1,19 +1,35 @@
 import uuid
 from agents.curriculum import generate_framework_json, revise_framework_json
-from agents.validator import run_full_validation
+from agents.validator import run_full_validation, auto_correct_hours
 from agents.content import generate_content_pack
 from state_store import save_session, get_session
 from logger import logger
+from cloud import ask_llm
 
-def process_request(topic: str, hours: int):
+def clarify_request(topic: str) -> str:
+    """
+    [ТРЕБОВАНИЕ КЕЙСА]: Агент задает уточняющие вопросы, если не хватает данных.
+    """
+    prompt = f"""
+    Ты — методист Академии цифрового развития. Пользователь хочет создать программу по теме: "{topic}".
+    Задай ровно 3 коротких уточняющих вопроса (про аудиторию, её уровень и форму аттестации).
+    Верни ТОЛЬКО список вопросов без приветствий.
+    """
+    return ask_llm(prompt, task_type="content")
+
+def process_request(topic: str, hours: int, template_type: str = "ДПО"):
     """
     [СЦЕНАРИЙ КЕЙСА]: Прием запроса методиста, генерация каркаса.
     """
     session_id = str(uuid.uuid4())
-    logger.info(f"Начата генерация каркаса. Тема: {topic}, Часы: {hours}")
+    logger.info(f"Начата генерация каркаса. Тема: {topic}, Часы: {hours}, Тип: {template_type}")
     
     try:
-        framework_obj = generate_framework_json(topic, hours)
+        # Передаем template_type в агента!
+        framework_obj = generate_framework_json(topic, hours, template_type)
+        
+        # [ТРЕБОВАНИЕ КЕЙСА]: Автоматическая коррекция часов (защита от ошибок LLM)
+        framework_obj = auto_correct_hours(framework_obj, hours)
         
         # [ТРЕБОВАНИЕ КЕЙСА]: Отчет автопроверки
         report = run_full_validation(framework_obj)

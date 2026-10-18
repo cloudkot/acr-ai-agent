@@ -25,9 +25,21 @@ def startup_event():
 class GenerateReq(BaseModel):
     topic: str
     hours: int
+    template_type: str = "ДПО"  
+
 
 class RevisionReq(BaseModel):
     instruction: str
+
+class ClarifyReq(BaseModel):
+    topic: str
+
+@app.post("/api/clarify")
+def clarify_endpoint(req: ClarifyReq):
+    """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы перед стартом."""
+    from agents.orchestrator import clarify_request
+    questions = clarify_request(req.topic)
+    return {"questions": questions}
 
 @app.get("/")
 def root():
@@ -36,7 +48,7 @@ def root():
 @app.post("/api/generate")
 def generate_framework_endpoint(req: GenerateReq):
     """Шаг 1: Генерация каркаса."""
-    return process_request(req.topic, req.hours)
+    return process_request(req.topic, req.hours, req.template_type)
 
 @app.post("/api/revise/{session_id}")
 def revise_endpoint(session_id: str, req: RevisionReq):

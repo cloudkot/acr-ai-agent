@@ -32,3 +32,28 @@ def run_full_validation(framework: Framework) -> dict:
             "warnings": unverified_sources_found
         }
     }
+
+def auto_correct_hours(framework: Framework, target_hours: int) -> Framework:
+    """
+    [ТРЕБОВАНИЕ КЕЙСА]: Защита от математических ошибок LLM.
+    Если сумма часов не сходится, корректируем последний модуль.
+    """
+    if not framework.modules:
+        return framework
+        
+    current_sum = sum(module.hours for module in framework.modules)
+    diff = target_hours - current_sum
+    
+    if diff != 0:
+        # Изменяем часы последнего модуля на разницу
+        last_mod = framework.modules[-1]
+        last_mod.hours += diff
+        
+        # Защита от отрицательных значений, если ИИ налажал с объемом
+        if last_mod.hours < 1:
+            last_mod.hours = 1 
+            
+        # Обновляем общий счетчик в каркасе
+        framework.total_hours = sum(m.hours for m in framework.modules)
+        
+    return framework
