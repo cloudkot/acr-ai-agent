@@ -25,5 +25,9 @@ jobs:
         
     - name: Run tests with pytest
       working-directory: ./backend
+      # [ТРЕБОВАНИЕ КЕЙСА]: Подставляем фейковые ключи для CI
+      env:
+        OPENAI_API_KEY: "sk-dummy-key-for-ci"
+        OPENAI_BASE_URL: "https://dummy-url"
       run: |
         pytest tests/
