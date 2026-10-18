@@ -2,14 +2,21 @@ from fastapi.testclient import TestClient
 from main import app
 from unittest.mock import patch
 from schemas import Framework, Module, Competency
+from state_store import init_db
+
+# [ТРЕБОВАНИЕ КЕЙСА]: Инициализируем БД перед тестами
+init_db()
 
 client = TestClient(app)
 
-@patch("agents.curriculum.generate_framework_json")
+# [АРХИТЕКТУРА]: Важно патчить функцию там, где она ИСПОЛЬЗУЕТСЯ (в оркестраторе), а не там, где объявлена!
+@patch("agents.orchestrator.generate_framework_json")
 def test_generate_endpoint(mock_gen):
-    """Проверка эндпоинта генерации."""
+    """Проверка эндпоинта генерации (сквозной сценарий)."""
+    
+    # Подкладываем фейковый ответ вместо реального вызова LLM
     mock_gen.return_value = Framework(
-        goal="Test",
+        goal="Test Goal",
         competencies=[Competency(name="C1", knowledge=[], skills=[])],
         modules=[Module(title="M1", hours=72)],
         total_hours=72
