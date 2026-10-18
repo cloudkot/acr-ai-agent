@@ -23,8 +23,16 @@ def generate_content_pack(framework_text: str) -> dict:
     """
     seminars = ask_llm(prompt_seminars, model=MODEL_FAST)
     
+        prompt_lectures = f"""
+    На основе этого учебного плана:
+    {framework_str}
+    
+    Составь развернутый план лекций (минимум по 3 тезиса на каждый модуль).
+    """
+    lectures = ask_llm(prompt_lectures, model=MODEL_FAST)
+    
     return {
         "tests": tests,
         "seminars": seminars,
-        "lectures": "План лекций будет сгенерирован отдельным шагом (Slide Generator)."
+        "lectures": lectures 
     }

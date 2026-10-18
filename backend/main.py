@@ -4,6 +4,8 @@ from pydantic import BaseModel
 from agents.orchestrator import process_request, approve_and_generate, SESSIONS
 from export import export_to_docx
 from cloud import ask_llm
+from export import export_to_docx, export_to_pptx
+from fastapi.responses import FileResponse
 
 app = FastAPI(title="ACR AI Agent")
 
@@ -56,3 +58,19 @@ def export_endpoint(session_id: str):
         "message": f"Файл {filename} успешно сгенерирован на сервере.",
         "filename": filename
     }
+
+@app.post("/api/export-pptx/{session_id}")
+def export_pptx_endpoint(session_id: str):
+    if session_id not in SESSIONS:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+    
+    session = SESSIONS[session_id]
+    filename = f"presentation_{session_id[:8]}.pptx"
+    
+    export_to_pptx(session["framework"], filename)
+    
+    return FileResponse(
+        path=filename, 
+        filename=filename, 
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )

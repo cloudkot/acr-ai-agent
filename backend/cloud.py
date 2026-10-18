@@ -1,28 +1,38 @@
 import os
-from openai import OpenAI
+import time
+from openai import OpenAI, APITimeoutError, APIConnectionError
+from fastapi import HTTPException
 
-# [ОГРАНИЧЕНИЕ КЕЙСА]: Использование инфраструктуры Cloud.ru (GigaSchool).
-# На ВМ переменные OPENAI_BASE_URL и OPENAI_API_KEY заданы системой.
 api_key = os.getenv("OPENAI_API_KEY", "")
 base_url = os.getenv("OPENAI_BASE_URL", "https://hub.gigaschool.ru/api/v1/llm/v1")
 
-client = OpenAI(api_key=api_key, base_url=base_url)
+# [ТРЕБОВАНИЕ КЕЙСА]: Обработка ошибок и сбоев (таймаут)
+client = OpenAI(api_key=api_key, base_url=base_url, timeout=60.0)
 
-# [АРХИТЕКТУРА]: LLM Router. Выбор модели под задачу.
-MODEL_FAST = "GigaChat/GigaChat-3-Pro"                    # Для простых задач
-MODEL_REASONING = "ai-sage/GigaChat3.5-432B-A28B-Reasoning" # Для сложной логики
+MODEL_FAST = "GigaChat/GigaChat-3-Pro"
+MODEL_REASONING = "ai-sage/GigaChat3.5-432B-A28B-Reasoning"
 
-def ask_llm(prompt: str, model: str = MODEL_FAST) -> str:
+def ask_llm(prompt: str, model: str = MODEL_FAST, is_json: bool = False) -> str:
     """
-    [ОГРАНИЧЕНИЕ КЕЙСА]: Потоковая выдача (stream) не поддерживается шлюзом.
-    [ТРЕБОВАНИЕ КЕЙСА]: Материалы готовятся на русском языке.
+    [ТРЕБОВАНИЕ КЕЙСА]: Отказоустойчивость. Retry при сбоях.
     """
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1500 # Для Reasoning-модели задаем запас токенов
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"Ошибка LLM: {str(e)}"
+    kwargs = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 2000
+    }
+    if is_json:
+        kwargs["response_format"] = {"type": "json_object"}
+
+    # [ТРЕБОВАНИЕ КЕЙСА]: Retries (3 попытки)
+    for attempt in range(3):
+        try:
+            response = client.chat.completions.create(**kwargs)
+            return response.choices[0].message.content
+        except (APITimeoutError, APIConnectionError) as e:
+            if attempt == 2:
+                # [ТРЕБОВАНИЕ КЕЙСА]: Структурированная ошибка вместо строки
+                raise HTTPException(status_code=504, detail=f"LLM Timeout after 3 attempts: {str(e)}")
+            time.sleep(2) # Ждем 2 секунды перед повтором
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"LLM Error: {str(e)}")

@@ -40,7 +40,13 @@ DeepSeek V4. Поиск по источникам через Managed RAG, век
 
 ## Как запустить
 
-Backend пока в виде каркаса, эндпоинты описаны в `backend/main.py`.
+backend:
+
+    cd backend
+    pip install -r requirements.txt
+    uvicorn main:app --host 0.0.0.0 --port 8000
+
+Демо доступно на порту 8000
 
 Frontend:
 
