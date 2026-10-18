@@ -1,73 +1,47 @@
-import json
 from cloud import ask_llm
 from schemas import Framework
+from utils.json_parser import extract_json_from_text
 
 def generate_content_pack(framework: Framework) -> dict:
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Генерация полного комплекта материалов.
-    Возвращает структурированные данные для дальнейшего экспорта.
     """
     framework_str = framework.model_dump_json(indent=2)
     
-    # 1. Генерация тестов (строгий JSON)
+    # 1. Генерация тестов
     prompt_tests = f"""
     На основе этого учебного плана:
     {framework_str}
     
     Составь 3 тестовых вопроса с 4 вариантами ответов.
-    Привяжи каждый вопрос к одной из компетенций из плана.
-    Формат ответа — строгий JSON:
-    [
-        {{
-            "question": "Текст вопроса?",
-            "options": ["Вариант 1", "Вариант 2", "Вариант 3", "Вариант 4"],
-            "correct_answer": "Вариант 1",
-            "related_competency": "Название компетенции"
-        }}
-    ]
+    Привяжи каждый вопрос к одной из компетенций.
+    Формат JSON: [{{"question": "...", "options": ["1","2","3","4"], "correct_answer": "1", "related_competency": "..."}}]
     """
     tests_raw = ask_llm(prompt_tests, task_type="content", is_json=True)
-    try:
-        if "```json" in tests_raw:
-            tests_raw = tests_raw.split("```json")[1].split("```")[0].strip()
-        tests = json.loads(tests_raw)
-    except:
-        tests = [{"question": tests_raw, "options": [], "correct_answer": "", "related_competency": ""}]
-
+    tests = extract_json_from_text(tests_raw)
+    
     # 2. Генерация семинаров
     prompt_seminars = f"""
     На основе этого учебного плана:
     {framework_str}
     
-    Составь 1 практическое задание для семинара. Обязательно опиши критерии оценки (от 0 до 10 баллов).
-    Формат ответа — строгий JSON:
-    {{
-        "task": "Описание задания",
-        "criteria": "Критерии оценки",
-        "related_competency": "Название компетенции"
-    }}
+    Составь 1 практическое задание для семинара. Опиши критерии оценки.
+    Формат JSON: {{"task": "...", "criteria": "...", "related_competency": "..."}}
     """
     seminars_raw = ask_llm(prompt_seminars, task_type="content", is_json=True)
-    try:
-        if "```json" in seminars_raw:
-            seminars_raw = seminars_raw.split("```json")[1].split("```")[0].strip()
-        seminars = json.loads(seminars_raw)
-    except:
-        seminars = {"task": seminars_raw, "criteria": "Не удалось сгенерировать", "related_competency": ""}
+    seminars = extract_json_from_text(seminars_raw)
 
-    # 3. Генерация планов лекций
+    # 3. Генерация лекций
     prompt_lectures = f"""
     На основе этого учебного плана:
     {framework_str}
     
-    Составь развернутый план лекций. Для каждого модуля опиши 3-4 ключевых тезиса.
+    Составь развернутый план лекций (3-4 тезиса на каждый модуль).
     """
     lectures = ask_llm(prompt_lectures, task_type="content")
 
     return {
-        "tests": tests,
-        "seminars": seminars,
+        "tests": tests, 
+        "seminars": seminars, 
         "lectures": lectures
     }
-
-    

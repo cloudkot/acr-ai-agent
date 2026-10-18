@@ -2,10 +2,17 @@ from schemas import Framework
 import re
 
 def run_full_validation(framework: Framework) -> dict:
+    """
+    [ТРЕБОВАНИЕ КЕЙСА]: Отчет автопроверки (часы, покрытие, источники).
+    """
+    # Проверка арифметики часов
     calculated_hours = sum(module.hours for module in framework.modules)
     hours_match = calculated_hours == framework.total_hours
+    
+    # Проверка покрытия компетенций
     coverage_ok = len(framework.competencies) >= 3
     
+    # Проверка пометок источников
     unverified_sources_found = []
     if "[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]" in framework.goal:
         unverified_sources_found.append("В цели есть неподтвержденные источники")
