@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Component } from 'react';
+import type { ErrorInfo, ReactNode } from 'react';
 import { 
   Loader2, ArrowRight, CheckCircle2, Download, 
   FileText, BookOpen, GraduationCap, RotateCcw, 
@@ -14,9 +15,42 @@ import {
   type ContentResponse 
 } from './api';
 
+// --- Error Boundary ---
+class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean, error: Error | null}> {
+  constructor(props: {children: ReactNode}) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("UI Crash:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-6">
+          <div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-lg max-w-md w-full text-center">
+            <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+            <h2 className="text-xl font-bold mb-2 text-gray-900 dark:text-white">Что-то пошло не так</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+              Произошла ошибка при отображении данных. Возможно, сервер прислал неверный формат.
+            </p>
+            <button onClick={() => window.location.reload()} className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700">
+              Перезагрузить страницу
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 type Screen = 'input' | 'framework' | 'result';
 
-function App() {
+function MainApp() {
   const [screen, setScreen] = useState<Screen>('input');
   const [topic, setTopic] = useState('');
   const [hours, setHours] = useState<number>(72);
@@ -27,11 +61,9 @@ function App() {
   const [framework, setFramework] = useState<Framework | null>(null);
   const [content, setContent] = useState<ContentResponse | null>(null);
   
-  // Для доработки
   const [reviseText, setReviseText] = useState('');
   const [revising, setRevising] = useState(false);
 
-  // Тёмная тема
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem('theme');
     if (saved) return saved === 'dark';
@@ -49,13 +81,8 @@ function App() {
   }, [darkMode]);
 
   const handleGenerate = async () => {
-    if (!topic.trim()) { setError('Пожалуйста, укажите тему программы'); return; }
-    if (topic.trim().length < 3) { setError('Тема слишком короткая (минимум 3 символа)'); return; }
-    if (topic.length > 200) { setError('Тема слишком длинная (максимум 200 символов)'); return; }
-    if (!Number.isInteger(hours) || hours < 16 || hours > 500) {
-      setError('Объём программы должен быть целым числом от 16 до 500 часов');
-      return;
-    }
+    if (!topic.trim() || topic.trim().length < 3) { setError('Тема слишком короткая'); return; }
+    if (hours < 16 || hours > 500) { setError('Объём программы должен быть от 16 до 500 часов'); return; }
 
     setError(null);
     setLoading(true);
@@ -63,6 +90,11 @@ function App() {
       const res = await generateFramework(topic.trim(), hours);
       setSessionId(res.session_id);
       setFramework(res.framework);
+      
+      if (res.validation_report) {
+        setContent({ validation_report: res.validation_report } as any);
+      }
+      
       setScreen('framework');
     } catch (e: any) {
       setError(e.message || 'Ошибка сети. Проверьте соединение.');
@@ -91,6 +123,7 @@ function App() {
     setError(null);
     try {
       const res = await approveFramework(sessionId);
+      console.log("Ответ от /approve:", res);
       setContent(res);
       setScreen('result');
     } catch (e: any) {
@@ -119,30 +152,9 @@ function App() {
     setError(null);
   };
 
-  // Функция для красивого вывода отчета (если он пришел как объект)
-  const renderValidationReport = (report: any) => {
-    if (!report) return null;
-    if (typeof report === 'string') {
-      return <p className="whitespace-pre-wrap">{report}</p>;
-    }
-    return (
-      <div className="space-y-2">
-        {Object.entries(report).map(([key, value]) => (
-          <div key={key} className="flex justify-between items-center border-b border-green-200 dark:border-green-800 pb-1">
-            <span className="capitalize text-gray-600 dark:text-gray-400">{key.replace(/_/g, ' ')}</span>
-            <span className="font-semibold text-green-700 dark:text-green-400">
-              {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-            </span>
-          </div>
-        ))}
-      </div>
-    );
-  };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 dark:from-gray-900 dark:to-gray-800 text-gray-900 dark:text-gray-100 transition-colors">
       
-      {/* Шапка */}
       <header className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 sticky top-0 z-10 transition-colors">
         <div className="max-w-5xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -170,7 +182,6 @@ function App() {
             </div>
           </div>
 
-          {/* Прогресс-бар */}
           <div className="flex items-center mt-4 text-xs">
             <Step num={1} label="Ввод" active={screen === 'input'} done={screen !== 'input'} />
             <div className={`flex-1 h-0.5 mx-2 ${screen !== 'input' ? 'bg-green-500' : 'bg-gray-200 dark:bg-gray-700'}`} />
@@ -181,7 +192,6 @@ function App() {
         </div>
       </header>
 
-      {/* Красивое отображение ошибки (вместо Failed to fetch) */}
       {error && (
         <div className="max-w-5xl mx-auto mt-4 px-6 animate-fade-in-up">
           <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 px-4 py-3 rounded-lg text-sm flex items-start justify-between gap-3">
@@ -196,7 +206,6 @@ function App() {
 
       <main className="max-w-5xl mx-auto px-6 py-10">
         
-        {/* ЭКРАН 1: Ввод */}
         {screen === 'input' && (
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-8 max-w-2xl mx-auto animate-fade-in-up transition-colors">
             <h1 className="text-3xl font-bold mb-2">Создайте программу обучения</h1>
@@ -213,18 +222,6 @@ function App() {
                   className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50 dark:bg-gray-700 dark:text-white transition-colors"
                   disabled={loading}
                 />
-                {/* Быстрые подсказки */}
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {["Python", "Frontend", "DevOps", "Data Science", "ML"].map((tag) => (
-                    <button 
-                      key={tag} 
-                      onClick={() => setTopic(tag)}
-                      className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 px-3 py-1 rounded-full hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors"
-                    >
-                      {tag}
-                    </button>
-                  ))}
-                </div>
               </div>
               
               <div>
@@ -234,21 +231,15 @@ function App() {
                     type="button"
                     onClick={() => setHours(prev => Math.max(16, prev - 1))}
                     disabled={loading || hours <= 16}
-                    className="px-4 py-3 text-gray-500 hover:text-blue-600 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-50 disabled:hover:bg-transparent transition-colors"
+                    className="px-4 py-3 text-gray-500 hover:text-blue-600 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-50"
                   >
                     <Minus className="w-5 h-5" />
                   </button>
                   <input
                     type="number"
-                    value={hours}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value, 10);
-                      setHours(isNaN(val) ? 16 : val);
-                    }}
-                    onBlur={() => {
-                      if (hours < 16) setHours(16);
-                      if (hours > 500) setHours(500);
-                    }}
+                    value={hours === 0 ? '' : hours}
+                    onChange={(e) => setHours(e.target.value === '' ? 0 : parseInt(e.target.value, 10))}
+                    onBlur={() => { if (hours < 16) setHours(16); if (hours > 500) setHours(500); }}
                     min={16} max={500}
                     disabled={loading}
                     className="flex-1 w-full bg-transparent text-center font-semibold text-lg focus:outline-none dark:text-white [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -257,12 +248,11 @@ function App() {
                     type="button"
                     onClick={() => setHours(prev => Math.min(500, prev + 1))}
                     disabled={loading || hours >= 500}
-                    className="px-4 py-3 text-gray-500 hover:text-blue-600 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-50 disabled:hover:bg-transparent transition-colors"
+                    className="px-4 py-3 text-gray-500 hover:text-blue-600 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-50"
                   >
                     <Plus className="w-5 h-5" />
                   </button>
                 </div>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Рекомендуем от 16 до 500 часов.</p>
               </div>
               
               <button
@@ -276,51 +266,57 @@ function App() {
           </div>
         )}
 
-        {/* ЭКРАН 2: Каркас */}
         {screen === 'framework' && framework && (
           <div className="space-y-6 animate-fade-in-up">
+            {content?.validation_report?.hours_match !== undefined && (
+              <div className={`p-4 rounded-lg border ${
+                content.validation_report.hours_match 
+                  ? 'bg-green-100 border-green-500 text-green-800 dark:bg-green-900/30 dark:border-green-700 dark:text-green-300' 
+                  : 'bg-red-100 border-red-500 text-red-800 dark:bg-red-900/30 dark:border-red-700 dark:text-red-300'
+              }`}>
+                <h3 className="font-bold mb-2">
+                  {content.validation_report.hours_match ? '✅ Отчёт автопроверки' : '⚠️ Внимание: есть расхождения'}
+                </h3>
+                <p>Сумма часов: <strong>{content.validation_report.calculated_total}</strong> / {content.validation_report.expected_total}</p>
+                <p>Покрытие компетенций: {content.validation_report.competency_coverage ? 'Достаточно' : 'Мало'}</p>
+              </div>
+            )}
+
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-6 transition-colors">
-              <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wide mb-2">
+              <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase mb-2">
                 <GraduationCap className="w-4 h-4" /> Цель программы
               </div>
-              <p className="text-lg text-gray-800 dark:text-gray-200">{framework.goal}</p>
-              <div className="mt-3 text-sm text-gray-500 dark:text-gray-400">
-                Всего часов: <span className="font-semibold text-gray-900 dark:text-white">{framework.total_hours}</span>
-              </div>
+              <p className="text-lg text-gray-800 dark:text-gray-200">{framework.goal || 'Цель не указана'}</p>
             </div>
 
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-6 transition-colors">
-              <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wide mb-4">
+              <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase mb-4">
                 <BookOpen className="w-4 h-4" /> Модули программы
               </div>
               <div className="space-y-2">
-                {framework.modules.map((mod, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg transition-colors">
+                {framework.modules?.map((mod: any, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 flex items-center justify-center text-sm font-bold">{i + 1}</div>
-                      <span className="font-medium">{mod.title}</span>
+                      <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold">{i + 1}</div>
+                      <span className="font-medium">{mod.title || mod.name || 'Без названия'}</span>
                     </div>
-                    <span className="text-sm text-gray-600 dark:text-gray-300 font-semibold">{mod.hours} ч</span>
+                    {mod.hours && <span className="font-semibold">{mod.hours} ч</span>}
                   </div>
                 ))}
               </div>
             </div>
 
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-6 transition-colors">
-              <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wide mb-4">
+              <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase mb-4">
                 <CheckCircle2 className="w-4 h-4" /> Карта компетенций
               </div>
               <div className="space-y-3">
-                {framework.competencies.map((comp, i) => (
+                {framework.competencies?.map((comp, i) => (
                   <div key={i} className="p-4 border dark:border-gray-700 rounded-lg">
-                    <div className="font-semibold mb-2">{comp.name}</div>
+                    <div className="font-semibold mb-2">{comp.name || 'Компетенция'}</div>
                     <div className="flex flex-wrap gap-2">
-                      {comp.knowledge.map((k, j) => (
-                        <span key={j} className="bg-blue-100 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200 px-2.5 py-1 rounded-full text-xs">{k}</span>
-                      ))}
-                      {comp.skills.map((s, j) => (
-                        <span key={`s${j}`} className="bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-200 px-2.5 py-1 rounded-full text-xs">{s}</span>
-                      ))}
+                      {comp.knowledge?.map((k, j) => <span key={j} className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs">{k}</span>)}
+                      {comp.skills?.map((s, j) => <span key={`s${j}`} className="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs">{s}</span>)}
                     </div>
                   </div>
                 ))}
@@ -328,26 +324,21 @@ function App() {
             </div>
 
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-6 border-l-4 border-l-purple-500 transition-colors">
-              <div className="flex items-center gap-2 text-xs font-semibold text-purple-600 dark:text-purple-400 uppercase tracking-wide mb-3">
+              <div className="flex items-center gap-2 text-xs font-semibold text-purple-600 uppercase mb-3">
                 <Sparkles className="w-4 h-4" /> Точечная доработка
               </div>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">Не нравится каркас? Опишите, что изменить — ИИ перепишет только нужные части.</p>
               <div className="flex gap-2">
                 <input
                   type="text"
                   value={reviseText}
                   onChange={(e) => setReviseText(e.target.value)}
                   placeholder="Например: добавь модуль по асинхронности"
-                  className="flex-1 px-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 bg-gray-50 dark:bg-gray-700 dark:text-white text-sm transition-colors"
+                  className="flex-1 px-4 py-2 border rounded-lg bg-gray-50 dark:bg-gray-700 text-sm"
                   disabled={revising}
                 />
-                <button
-                  onClick={handleRevise}
-                  disabled={revising || !reviseText.trim()}
-                  className="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50 flex items-center gap-2"
-                >
+                <button onClick={handleRevise} disabled={revising || !reviseText.trim()} className="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2">
                   {revising ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                  {revising ? 'Дорабатываю...' : 'Применить'}
+                  Применить
                 </button>
               </div>
             </div>
@@ -362,7 +353,6 @@ function App() {
           </div>
         )}
 
-        {/* ЭКРАН 3: Результат */}
         {screen === 'result' && content && (
           <div className="space-y-6 animate-fade-in-up">
             <div className="bg-gradient-to-r from-green-50 to-blue-50 dark:from-green-900/20 dark:to-blue-900/20 border border-green-200 dark:border-green-800 rounded-2xl p-6 transition-colors">
@@ -372,61 +362,79 @@ function App() {
                 </div>
                 <div>
                   <div className="text-xl font-bold">Программа готова! 🎉</div>
-                  <div className="text-sm text-gray-600 dark:text-gray-400">Скачайте материалы или просмотрите ниже</div>
+                  <div className="text-sm text-gray-600 dark:text-gray-400">Скачайте файлы или просмотрите материалы ниже</div>
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {content.content?.tests?.questions && content.content.tests.questions.length > 0 && (
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-6 transition-colors">
-                <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wide mb-3">
+                <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 uppercase mb-4">
                   <FileText className="w-4 h-4" /> Тесты
                 </div>
-                <div className="whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-700 p-4 rounded-lg max-h-64 overflow-y-auto transition-colors">
-                  {content.content.tests}
-                </div>
-              </div>
-              <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-6 transition-colors">
-                <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wide mb-3">
-                  <FileText className="w-4 h-4" /> Семинары
-                </div>
-                <div className="whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-700 p-4 rounded-lg max-h-64 overflow-y-auto transition-colors">
-                  {content.content.seminars}
-                </div>
-              </div>
-            </div>
-
-            {/* Блок Отчета автопроверки (СУДЬЯ ЭТОГО ЖДАЛ) */}
-            {content.validation_report && (
-              <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-6 transition-colors">
-                <div className="flex items-center gap-2 text-xs font-semibold text-green-600 dark:text-green-400 uppercase tracking-wide mb-3">
-                  <CheckCircle2 className="w-4 h-4" /> Отчёт автопроверки
-                </div>
-                <div className="text-sm text-gray-700 dark:text-gray-300 bg-green-50 dark:bg-green-900/20 p-4 rounded-lg">
-                  {renderValidationReport(content.validation_report)}
+                <div className="space-y-4">
+                  {content.content.tests.questions.map((q, idx) => (
+                    <div key={idx} className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-lg border dark:border-gray-700">
+                      <p className="font-medium text-gray-900 dark:text-gray-100">{idx + 1}. {q.question}</p>
+                      <ul className="mt-2 space-y-1 text-sm text-gray-700 dark:text-gray-300">
+                        {q.options?.map((opt, i) => (
+                          <li key={i} className={opt === q.correct_answer ? "text-green-600 font-bold" : ""}>
+                            {opt === q.correct_answer ? "✓ " : "○ "} {opt}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <button
-                onClick={() => handleDownload('docx')}
-                className="flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors"
-              >
-                <FileDown className="w-5 h-5" /> Скачать DOCX
-              </button>
-              <button
-                onClick={() => handleDownload('pptx')}
-                className="flex items-center justify-center gap-2 bg-purple-600 text-white py-3 rounded-lg font-medium hover:bg-purple-700 transition-colors"
-              >
-                <Presentation className="w-5 h-5" /> Скачать PPTX
-              </button>
-              <button
-                onClick={() => handleDownload('lms')}
-                className="flex items-center justify-center gap-2 bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 transition-colors"
-              >
-                <Download className="w-5 h-5" /> Скачать LMS (.txt)
-              </button>
+            {content.content?.seminars?.task && (
+              <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-6 transition-colors">
+                <div className="flex items-center gap-2 text-xs font-semibold text-orange-600 uppercase mb-4">
+                  <FileText className="w-4 h-4" /> Задание для семинара
+                </div>
+                <p className="text-gray-800 dark:text-gray-200 mb-3">{content.content.seminars.task}</p>
+                {content.content.seminars.criteria && (
+                  <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-lg text-sm text-orange-900 dark:text-orange-200 border border-orange-200 dark:border-orange-800">
+                    <strong>Критерии оценки:</strong>
+                    <p className="whitespace-pre-wrap mt-1">{content.content.seminars.criteria}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {content.content?.lectures?.modules_plan && content.content.lectures.modules_plan.length > 0 && (
+              <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-6 transition-colors">
+                <div className="flex items-center gap-2 text-xs font-semibold text-purple-600 uppercase mb-4">
+                  <BookOpen className="w-4 h-4" /> Планы лекций
+                </div>
+                <div className="space-y-4">
+                  {content.content.lectures.modules_plan.map((mod, idx) => (
+                    <div key={idx} className="border-l-4 border-purple-400 pl-4">
+                      <h4 className="font-bold text-gray-800 dark:text-gray-200">{mod.module_title}</h4>
+                      <ul className="list-disc list-inside mt-2 text-sm text-gray-700 dark:text-gray-300">
+                        {mod.theses?.map((thesis, i) => <li key={i}>{thesis}</li>)}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-6 transition-colors">
+              <h3 className="text-lg font-bold mb-4">Скачать файлы:</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <button onClick={() => handleDownload('docx')} className="flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700">
+                  <FileDown className="w-5 h-5" /> Word
+                </button>
+                <button onClick={() => handleDownload('pptx')} className="flex items-center justify-center gap-2 bg-purple-600 text-white py-3 rounded-lg font-medium hover:bg-purple-700">
+                  <Presentation className="w-5 h-5" /> Презентация
+                </button>
+                <button onClick={() => handleDownload('lms')} className="flex items-center justify-center gap-2 bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700">
+                  <Download className="w-5 h-5" /> LMS (.txt)
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -447,4 +455,10 @@ function Step({ num, label, active, done }: { num: number; label: string; active
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <MainApp />
+    </ErrorBoundary>
+  );
+}
