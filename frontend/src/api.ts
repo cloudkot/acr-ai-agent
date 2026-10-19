@@ -1,7 +1,6 @@
 // frontend/src/api.ts
 
-const BASE_URL = 'https://tochka-sborki-2026-team-058.hub.gigaschool.ru:8000/api';
-// Для локальной разработки: const BASE_URL = 'http://localhost:8000/api';
+const BASE_URL = '/api';
 
 export interface Competency {
   name: string;

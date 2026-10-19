@@ -33,3 +33,13 @@ def test_generate_invalid_hours():
     response = client.post("/api/generate", json={"topic": "Test", "hours": -5})
     # Так как у нас стоит валидация Pydantic, FastAPI сам вернет 422
     assert response.status_code == 422
+
+def test_generate_invalid_hours():
+    """[ТРЕБОВАНИЕ КЕЙСА]: Тест на сбой (слишком мало часов)."""
+    response = client.post("/api/generate", json={"topic": "Test", "hours": 5, "template_type": "ДПО"})
+    assert response.status_code == 422 # FastAPI автоматически отклонит
+
+def test_upload_invalid_file():
+    """[ТРЕБОВАНИЕ КЕЙСА]: Тест на загрузку вредоносного файла."""
+    response = client.post("/api/upload-reference", files={"file": ("exploit.exe", b"malware", "application/x-msdownload")})
+    assert response.status_code == 400 # Разрешены только docx/txt/pdf

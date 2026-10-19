@@ -7,18 +7,23 @@ from pathlib import Path
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 
 async def save_and_parse_reference(file: UploadFile) -> str:
-    # [ТРЕБОВАНИЕ КЕЙСА]: Безопасная обработка имен файлов (защита от Path Traversal)
+    # [ТРЕБОВАНИЕ КЕЙСА]: Безопасность (защита от Path Traversal)
     ext = Path(file.filename).suffix.lower()
     if ext not in [".docx", ".txt", ".pdf"]:
-        raise HTTPException(status_code=400, detail="Недопустимый формат файла. Разрешены: .docx, .txt, .pdf")
+        raise HTTPException(400, "Разрешены только .docx, .txt, .pdf")
+        
+    # [ТРЕБОВАНИЕ КЕЙСА]: Защита от переполнения диска (DoS)
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(413, "Файл слишком большой (макс. 5 МБ)")
         
     safe_filename = f"{uuid.uuid4()}{ext}"
     file_path = os.path.join(UPLOAD_DIR, safe_filename)
     
     with open(file_path, "wb") as buffer:
-        content = await file.read()
         buffer.write(content)
         
     extracted_text = ""
@@ -34,10 +39,9 @@ async def save_and_parse_reference(file: UploadFile) -> str:
                 reader = PyPDF2.PdfReader(f)
                 extracted_text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка чтения файла: {str(e)}")
+        raise HTTPException(500, f"Ошибка чтения файла: {str(e)}")
     finally:
-        # Удаляем файл после парсинга, чтобы не забивать диск
         if os.path.exists(file_path):
-            os.remove(file_path)
+            os.remove(file_path) # Удаляем за собой мусор
             
     return extracted_text[:3000]

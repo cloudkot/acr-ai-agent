@@ -2,19 +2,19 @@ from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
 
 class Competency(BaseModel):
-    name: str
-    knowledge: List[str]
-    skills: List[str]
+    name: str = Field(..., description="Название компетенции")
+    knowledge: List[str] = Field(..., min_items=1)
+    skills: List[str] = Field(..., min_items=1)
 
 class Module(BaseModel):
-    title: str
-    hours: int
+    title: str = Field(..., min_length=3)
+    hours: int = Field(..., gt=0)
 
 class Framework(BaseModel):
-    goal: str
-    competencies: List[Competency]
-    modules: List[Module]
-    total_hours: int
+    goal: str = Field(..., min_length=10, max_length=300)
+    competencies: List[Competency] = Field(..., min_items=1)
+    modules: List[Module] = Field(..., min_items=1)
+    total_hours: int = Field(..., ge=16, le=500)
 
 # [ТРЕБОВАНИЕ КЕЙСА]: Структурированный тест
 class TestQuestion(BaseModel):
@@ -30,9 +30,9 @@ class SeminarTask(BaseModel):
     related_competency: str
 
 class GenerateRequest(BaseModel):
-    topic: str = Field(..., min_length=3)
-    hours: int = Field(..., ge=16, le=500)
-    template_type: Literal["ДПО", "Общеразвивающая"] = Field(default="ДПО")
+    topic: str = Field(..., min_length=3, max_length=100)
+    hours: int = Field(..., ge=16, le=500, description="Объем программы")
+    template_type: Literal["ДПО", "Общеразвивающая"] = "ДПО"
 
 class RevisionRequest(BaseModel):
     instruction: str = Field(..., min_length=5)

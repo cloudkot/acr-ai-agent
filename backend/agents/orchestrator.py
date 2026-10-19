@@ -2,14 +2,12 @@ import uuid
 from agents.curriculum import generate_framework_json, revise_framework_json
 from agents.validator import run_full_validation, auto_correct_hours
 from agents.content import generate_content_pack
-from state_store import save_session, get_session
+# [ТРЕБОВАНИЕ КЕЙСА]: Импортируем функцию логирования
+from state_store import save_session, get_session, log_action
 from logger import logger
 from cloud import ask_llm
 
 def clarify_request(topic: str) -> str:
-    """
-    [ТРЕБОВАНИЕ КЕЙСА]: Агент задает уточняющие вопросы, если не хватает данных.
-    """
     prompt = f"""
     Ты — методист Академии цифрового развития. Пользователь хочет создать программу по теме: "{topic}".
     Задай ровно 3 коротких уточняющих вопроса (про аудиторию, её уровень и форму аттестации).
@@ -18,31 +16,22 @@ def clarify_request(topic: str) -> str:
     return ask_llm(prompt, task_type="content")
 
 def process_request(topic: str, hours: int, template_type: str = "ДПО"):
-    """
-    [СЦЕНАРИЙ КЕЙСА]: Прием запроса методиста, генерация каркаса.
-    """
     session_id = str(uuid.uuid4())
     logger.info(f"Начата генерация каркаса. Тема: {topic}, Часы: {hours}, Тип: {template_type}")
     
     try:
-        # Передаем template_type в агента!
         framework_obj = generate_framework_json(topic, hours, template_type)
-        
-        # [ТРЕБОВАНИЕ КЕЙСА]: Автоматическая коррекция часов (защита от ошибок LLM)
         framework_obj = auto_correct_hours(framework_obj, hours)
-        
-        # [ТРЕБОВАНИЕ КЕЙСА]: Отчет автопроверки
         report = run_full_validation(framework_obj)
         
         if not report["hours_match"]:
             logger.warning(f"Ошибка валидации часов: {report['calculated_total']} != {hours}")
-            return {
-                "status": "error", 
-                "message": "Ошибка: сумма часов модулей не совпадает с общим объемом", 
-                "report": report
-            }
+            return {"status": "error", "message": "Ошибка: сумма часов не совпадает", "report": report}
             
         save_session(session_id, framework_obj, "waiting_for_approval")
+        
+        # [ТРЕБОВАНИЕ КЕЙСА]: Логируем действие в БД
+        log_action(session_id, "generated")
         
         return {
             "session_id": session_id,
@@ -55,9 +44,6 @@ def process_request(topic: str, hours: int, template_type: str = "ДПО"):
         return {"session_id": session_id, "status": "error", "message": str(e)}
 
 def approve_and_generate(session_id: str):
-    """
-    [СЦЕНАРИЙ КЕЙСА]: Human-in-the-loop. Методист утвердил каркас.
-    """
     session = get_session(session_id)
     if not session or session["status"] != "waiting_for_approval":
         return {"error": "Сессия не найдена или уже обработана"}
@@ -67,12 +53,12 @@ def approve_and_generate(session_id: str):
     content = generate_content_pack(session["framework"])
     save_session(session_id, session["framework"], "completed", content)
     
+    # [ТРЕБОВАНИЕ КЕЙСА]: Логируем утверждение
+    log_action(session_id, "approved")
+    
     return {"session_id": session_id, "status": "completed", "content": content}
 
 def revise_session(session_id: str, instruction: str):
-    """
-    [ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка без пересборки.
-    """
     session = get_session(session_id)
     if not session:
         return {"error": "Сессия не найдена"}
@@ -80,9 +66,10 @@ def revise_session(session_id: str, instruction: str):
     logger.info(f"Точечная правка сессии {session_id}: {instruction}")
     
     new_framework = revise_framework_json(session["framework"], instruction)
-    
-    # Сбрасываем статус обратно на утверждение
     save_session(session_id, new_framework, "waiting_for_approval")
+    
+    # [ТРЕБОВАНИЕ КЕЙСА]: Логируем правку
+    log_action(session_id, "revised")
     
     return {
         "session_id": session_id,
