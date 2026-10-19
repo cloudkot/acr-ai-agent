@@ -24,7 +24,7 @@ def generate_framework_json(topic: str, hours: int, template_type: str = "ДПО
     Составь каркас программы в формате строгого JSON. 
     Формат JSON:
     {{
-        "goal": "строка (с нормативной базой)",
+        "goal": "строка (до 150 символов, с нормативной базой)",
         "competencies": [
             {{"name": "строка", "knowledge": ["строка"], "skills": ["строка"]}}
         ],
@@ -36,16 +36,16 @@ def generate_framework_json(topic: str, hours: int, template_type: str = "ДПО
     
     ВАЖНО: Сумма часов всех модулей ДОЛЖНА быть ровно {hours}. Верни ТОЛЬКО валидный JSON.
     """
-    for attempt in range(2):
+        for attempt in range(3):
         response_text = ask_llm(prompt, task_type="framework", is_json=True)
         try:
             data = extract_json_from_text(response_text)
             return Framework(**data)
-        except ValidationError as e:
-            logger.warning(f"Ошибка валидации схемы от LLM (попытка {attempt+1}): {e}")
-            if attempt == 1:
-                raise ValueError("LLM не смогла выдать правильный JSON после 2 попыток")
-            time.sleep(1)
+        except Exception as e: # <--- Ловим ЛЮБУЮ ошибку (и ValueError, и ValidationError)
+            logger.warning(f"Ошибка парсинга JSON от LLM (попытка {attempt+1}): {e}")
+            if attempt == 2:
+                raise ValueError(f"LLM не смогла выдать правильный JSON после 3 попыток. Последняя ошибка: {e}")
+            time.sleep(1) # Ждем секунду и пробуем снова
 
     response_text = ask_llm(prompt, task_type="framework", is_json=True)
     data = extract_json_from_text(response_text) 
