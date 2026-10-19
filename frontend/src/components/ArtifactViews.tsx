@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Edit3, CheckCircle2 } from 'lucide-react';
 
 // 1. Карта компетенций
@@ -60,7 +60,7 @@ export const PlanView = ({ data }: { data: any[] }) => {
 };
 
 // 3. Тесты (с точечной доработкой)
-export const TestsView = ({ data, taskId, onRefine }: { data: any[], taskId: string, onRefine: (id: string, inst: string) => void }) => {
+export const TestsView = ({ data, onRefine }: { data: any[], onRefine: (id: string, inst: string) => void }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [instruction, setInstruction] = useState('');
 
