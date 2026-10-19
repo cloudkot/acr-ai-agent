@@ -68,4 +68,10 @@ def revise_framework_json(current_framework: Framework, instruction: str) -> Fra
     
     response_text = ask_llm(prompt, task_type="revision", is_json=True)
     data = extract_json_from_text(response_text)
-    return Framework(**data)
+    framework_obj = Framework(**data)
+    
+    # [ТРЕБОВАНИЕ КЕЙСА]: Очистка компетенций от случайных тегов
+    for comp in framework_obj.competencies:
+        comp.name = comp.name.replace("[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]", "").strip()
+        
+    return framework_obj
