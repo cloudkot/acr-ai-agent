@@ -13,6 +13,13 @@ export interface Module {
   title: string;
   hours: number;
 }
+export interface ValidationReport {
+  hours_match: boolean;
+  calculated_total: number;
+  expected_total: number;
+  competency_coverage: boolean;
+  total_competencies: number;
+}
 
 export interface Framework {
   goal: string;
@@ -24,6 +31,7 @@ export interface Framework {
 export interface GenerateResponse {
   session_id: string;
   status: string;
+  validation_report?: ValidationReport;
   framework: Framework;
 }
 
