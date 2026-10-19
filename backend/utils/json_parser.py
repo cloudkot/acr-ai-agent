@@ -2,10 +2,10 @@ import json
 import re
 
 def extract_json_from_text(text: str):
-    """
-    [ТРЕБОВАНИЕ КЕЙСА]: Устойчивость к ошибкам LLM.
-    Вырезает валидный JSON из ответа нейросети, даже если он обернут в markdown.
-    """
+    # [ТРЕБОВАНИЕ КЕЙСА]: Защита от None
+    if text is None or not isinstance(text, str):
+        raise ValueError("Получен пустой ответ от LLM (None)")
+
     match = re.search(r'```(?:json)?(.*?)```', text, re.DOTALL)
     if match:
         text = match.group(1).strip()
@@ -17,4 +17,4 @@ def extract_json_from_text(text: str):
     try:
         return json.loads(text)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Не удалось распарсить JSON от LLM. Ошибка: {e}. Текст: {text[:100]}...")
+        raise ValueError(f"Не удалось распарсить JSON от LLM. Ошибка: {e}")

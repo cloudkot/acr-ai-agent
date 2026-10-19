@@ -31,7 +31,7 @@ def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False) -> s
     kwargs = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 2000
+        "max_tokens": 4000
     }
     if is_json:
         kwargs["response_format"] = {"type": "json_object"}
@@ -40,10 +40,24 @@ def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False) -> s
     for attempt in range(3):
         try:
             response = client.chat.completions.create(**kwargs)
-            return response.choices[0].message.content
+            
+            # [ТРЕБОВАНИЕ КЕЙСА]: Защита от пустых ответов (когда GigaChat обрывает генерацию)
+            content = response.choices[0].message.content
+            if content is None or not content.strip():
+                raise ValueError("Модель вернула пустой ответ (возможно, не хватило токенов).")
+                
+            # Логируем токены
+            usage = response.usage
+            print(f"[LLM STATS] Модель: {model} | Всего токенов: {usage.total_tokens}")
+            
+            return content
+            
         except (APITimeoutError, APIConnectionError) as e:
             if attempt == 2:
                 raise LLMServiceError(f"Превышено время ожидания LLM: {str(e)}", status_code=504)
             time.sleep(2)
         except Exception as e:
-            raise LLMServiceError(f"Ошибка LLM: {str(e)}", status_code=500)
+            # Если это ошибка пустого ответа, пробуем еще раз
+            if attempt == 2:
+                raise LLMServiceError(f"Ошибка LLM: {str(e)}", status_code=500)
+            time.sleep(2)
