@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { 
   Loader2, ArrowRight, CheckCircle2, Download, 
   FileText, BookOpen, GraduationCap, RotateCcw, 
-  Sparkles, FileDown, Presentation, Moon, Sun
+  Sparkles, FileDown, Presentation, Moon, Sun,
+  Minus, Plus
 } from 'lucide-react';
 import { 
   generateFramework, 
@@ -24,7 +25,7 @@ function App() {
   
   const [sessionId, setSessionId] = useState<string>('');
   const [framework, setFramework] = useState<Framework | null>(null);
-  const [content, setContent] = useState<ContentResponse['content'] | null>(null);
+  const [content, setContent] = useState<ContentResponse | null>(null);
   
   // Для доработки
   const [reviseText, setReviseText] = useState('');
@@ -48,19 +49,44 @@ function App() {
   }, [darkMode]);
 
   const handleGenerate = async () => {
-    if (!topic.trim() || hours <= 0) {
-      setError('Введите тему и количество часов');
+    // 1. Проверка на пустоту
+    if (!topic.trim()) {
+      setError('Пожалуйста, укажите тему программы');
       return;
     }
+
+    // 2. Проверка минимальной длины темы
+    if (topic.trim().length < 3) {
+      setError('Тема слишком короткая. Опишите её подробнее (минимум 3 символа)');
+      return;
+    }
+
+    // 3. Проверка максимальной длины
+    if (topic.length > 200) {
+      setError('Тема слишком длинная. Пожалуйста, сократите описание до 200 символов');
+      return;
+    }
+
+    // 4. Проверка часов
+    if (!Number.isInteger(hours)) {
+      setError('Количество часов должно быть целым числом');
+      return;
+    }
+    
+    if (hours < 16 || hours > 500) {
+      setError('Объём программы должен быть от 16 до 500 часов');
+      return;
+    }
+
     setError(null);
     setLoading(true);
     try {
-      const res = await generateFramework(topic, hours);
+      const res = await generateFramework(topic.trim(), hours);
       setSessionId(res.session_id);
       setFramework(res.framework);
       setScreen('framework');
     } catch (e: any) {
-      setError(e.message || 'Не удалось сгенерировать каркас. Проверьте бэкенд.');
+      setError(e.message || 'Ошибка сети. Проверьте соединение.');
     } finally {
       setLoading(false);
     }
@@ -86,7 +112,7 @@ function App() {
     setError(null);
     try {
       const res = await approveFramework(sessionId);
-      setContent(res.content);
+      setContent(res);
       setScreen('result');
     } catch (e: any) {
       setError(e.message || 'Ошибка утверждения');
@@ -98,8 +124,8 @@ function App() {
   const handleDownload = async (type: 'docx' | 'pptx' | 'lms') => {
     try {
       await downloadFile(sessionId, type);
-    } catch (e) {
-      setError('Не удалось скачать файл');
+    } catch (e: any) {
+      setError(e.message || 'Не удалось скачать файл');
     }
   };
 
@@ -136,7 +162,6 @@ function App() {
                 </button>
               )}
               
-              {/* Кнопка переключения темы */}
               <button
                 onClick={() => setDarkMode(!darkMode)}
                 className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-600 dark:text-gray-300"
@@ -160,9 +185,10 @@ function App() {
 
       {/* Ошибка */}
       {error && (
-        <div className="max-w-5xl mx-auto mt-4 px-6">
-          <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 px-4 py-3 rounded-lg text-sm">
-            {error}
+        <div className="max-w-5xl mx-auto mt-4 px-6 animate-fade-in-up">
+          <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 px-4 py-3 rounded-lg text-sm flex items-center justify-between">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="text-red-500 hover:text-red-700">✕</button>
           </div>
         </div>
       )}
@@ -173,7 +199,7 @@ function App() {
         {screen === 'input' && (
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-8 max-w-2xl mx-auto animate-fade-in-up transition-colors">
             <h1 className="text-3xl font-bold mb-2">Создайте программу обучения</h1>
-            <p className="text-gray-500 dark:text-gray-400 mb-8">Опишите тему и объём — ИИ сгенерирует каркас курса за 20 секунд</p>
+            <p className="text-gray-500 dark:text-gray-400 mb-8">Опишите тему и объём — ИИ сгенерирует каркас курса</p>
             
             <div className="space-y-5">
               <div>
@@ -187,19 +213,51 @@ function App() {
                   disabled={loading}
                 />
               </div>
+              
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Объём (часы)</label>
-                <input
-                  type="number"
-                  value={hours}
-                  onChange={(e) => setHours(Number(e.target.value))}
-                  min={16}
-                  max={500}
-                  className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50 dark:bg-gray-700 dark:text-white transition-colors"
-                  disabled={loading}
-                />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Рекомендуем от 16 до 500 часов</p>
+                
+                {/* Кастомный счётчик без шага */}
+                <div className="flex items-center w-full border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-700 transition-colors overflow-hidden focus-within:ring-2 focus-within:ring-blue-500">
+                  <button
+                    type="button"
+                    onClick={() => setHours(prev => Math.max(16, prev - 1))}
+                    disabled={loading || hours <= 16}
+                    className="px-4 py-3 text-gray-500 hover:text-blue-600 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-50 disabled:hover:bg-transparent transition-colors"
+                  >
+                    <Minus className="w-5 h-5" />
+                  </button>
+                  
+                  <input
+                    type="number"
+                    value={hours}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      setHours(isNaN(val) ? 16 : val);
+                    }}
+                    onBlur={() => {
+                      if (hours < 16) setHours(16);
+                      if (hours > 500) setHours(500);
+                    }}
+                    min={16}
+                    max={500}
+                    disabled={loading}
+                    className="flex-1 w-full bg-transparent text-center font-semibold text-lg focus:outline-none dark:text-white 
+                               [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  />
+                  
+                  <button
+                    type="button"
+                    onClick={() => setHours(prev => Math.min(500, prev + 1))}
+                    disabled={loading || hours >= 500}
+                    className="px-4 py-3 text-gray-500 hover:text-blue-600 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-50 disabled:hover:bg-transparent transition-colors"
+                  >
+                    <Plus className="w-5 h-5" />
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Рекомендуем от 16 до 500 часов.</p>
               </div>
+              
               <button
                 onClick={handleGenerate}
                 disabled={loading}
@@ -329,7 +387,7 @@ function App() {
                   <FileText className="w-4 h-4" /> Тесты
                 </div>
                 <div className="whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-700 p-4 rounded-lg max-h-64 overflow-y-auto transition-colors">
-                  {content.tests}
+                  {content.content.tests}
                 </div>
               </div>
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-6 transition-colors">
@@ -337,10 +395,26 @@ function App() {
                   <FileText className="w-4 h-4" /> Семинары
                 </div>
                 <div className="whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-700 p-4 rounded-lg max-h-64 overflow-y-auto transition-colors">
-                  {content.seminars}
+                  {content.content.seminars}
                 </div>
               </div>
             </div>
+
+            {/* Блок Отчета автопроверки */}
+            {content.validation_report && (
+              <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border dark:border-gray-700 p-6 transition-colors">
+                <div className="flex items-center gap-2 text-xs font-semibold text-green-600 dark:text-green-400 uppercase tracking-wide mb-3">
+                  <CheckCircle2 className="w-4 h-4" /> Отчёт автопроверки
+                </div>
+                <div className="text-sm text-gray-700 dark:text-gray-300 bg-green-50 dark:bg-green-900/20 p-4 rounded-lg">
+                  {typeof content.validation_report === 'string' ? (
+                    <p className="whitespace-pre-wrap">{content.validation_report}</p>
+                  ) : (
+                    <pre className="text-xs overflow-auto">{JSON.stringify(content.validation_report, null, 2)}</pre>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <button
@@ -359,7 +433,7 @@ function App() {
                 onClick={() => handleDownload('lms')}
                 className="flex items-center justify-center gap-2 bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 transition-colors"
               >
-                <Download className="w-5 h-5" /> Скачать LMS (CSV)
+                <Download className="w-5 h-5" /> Скачать LMS (.txt)
               </button>
             </div>
           </div>
