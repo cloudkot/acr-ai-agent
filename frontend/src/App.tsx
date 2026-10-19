@@ -1,23 +1,23 @@
 import { useState, useEffect, Component } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
-import {
-  Loader2, ArrowRight, CheckCircle2, Download,
-  FileText, BookOpen, GraduationCap, RotateCcw,
+import { 
+  Loader2, ArrowRight, CheckCircle2, Download, 
+  FileText, BookOpen, GraduationCap, RotateCcw, 
   Sparkles, FileDown, Presentation, Moon, Sun,
-  Minus, Plus, AlertCircle, Zap, TrendingUp, Clock
+  Minus, Plus, AlertCircle
 } from 'lucide-react';
-import {
-  generateFramework,
-  approveFramework,
+import { 
+  generateFramework, 
+  approveFramework, 
   reviseFramework,
   downloadFile,
   type Framework,
-  type ContentResponse
+  type ContentResponse 
 } from './api';
 
 // --- Error Boundary ---
-class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean, error: Error | null }> {
-  constructor(props: { children: ReactNode }) {
+class ErrorBoundary extends Component<{children: ReactNode}, {hasError: boolean, error: Error | null}> {
+  constructor(props: {children: ReactNode}) {
     super(props);
     this.state = { hasError: false, error: null };
   }
@@ -54,18 +54,17 @@ function MainApp() {
   const [screen, setScreen] = useState<Screen>('input');
   const [topic, setTopic] = useState('');
   const [hours, setHours] = useState<number>(72);
-  const [hoursInput, setHoursInput] = useState<string>('72'); // Строка для свободного ввода
+  const [hoursInput, setHoursInput] = useState<string>('72');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
+  
   const [sessionId, setSessionId] = useState<string>('');
   const [framework, setFramework] = useState<Framework | null>(null);
   const [content, setContent] = useState<ContentResponse | null>(null);
-
+  
   const [reviseText, setReviseText] = useState('');
   const [revising, setRevising] = useState(false);
 
-  // Тёмная тема
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem('theme');
     if (saved) return saved === 'dark';
@@ -82,10 +81,9 @@ function MainApp() {
     }
   }, [darkMode]);
 
-  // Синхронизация часов
   const handleHoursChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
-    setHoursInput(val); // Разрешаем вводить всё, что угодно
+    setHoursInput(val);
     if (val !== '') {
       setHours(parseInt(val, 10) || 0);
     } else {
@@ -94,7 +92,6 @@ function MainApp() {
   };
 
   const handleHoursBlur = () => {
-    // Проверяем только когда пользователь ушел с поля
     let val = parseInt(hoursInput, 10);
     if (isNaN(val) || val < 16) val = 16;
     if (val > 500) val = 500;
@@ -104,8 +101,7 @@ function MainApp() {
 
   const handleGenerate = async () => {
     if (!topic.trim() || topic.trim().length < 3) { setError('Тема слишком короткая (минимум 3 символа)'); return; }
-
-    // Финальная проверка перед отправкой
+    
     let finalHours = parseInt(hoursInput, 10);
     if (isNaN(finalHours) || finalHours < 16 || finalHours > 500) {
       setError('Объём программы должен быть от 16 до 500 часов');
@@ -118,11 +114,11 @@ function MainApp() {
       const res = await generateFramework(topic.trim(), finalHours);
       setSessionId(res.session_id);
       setFramework(res.framework);
-
+      
       if (res.validation_report) {
         setContent({ validation_report: res.validation_report } as any);
       }
-
+      
       setScreen('framework');
     } catch (e: any) {
       setError(e.message || 'Ошибка сети. Проверьте соединение.');
@@ -183,8 +179,8 @@ function MainApp() {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#0F172A] text-gray-900 dark:text-gray-100 transition-colors duration-300 relative overflow-hidden">
-
-      {/* Декоративные градиентные пятна на фоне */}
+      
+      {/* Декоративные градиентные пятна */}
       <div className="absolute top-0 left-1/4 w-96 h-96 bg-blue-400/20 rounded-full blur-3xl -z-10 pointer-events-none"></div>
       <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-purple-400/20 rounded-full blur-3xl -z-10 pointer-events-none"></div>
 
@@ -203,7 +199,7 @@ function MainApp() {
                 <div className="text-[10px] uppercase tracking-wider font-semibold text-gray-500">EdTech Generator</div>
               </div>
             </div>
-
+            
             <div className="flex items-center gap-3">
               {screen !== 'input' && (
                 <button onClick={handleRestart} className="text-xs font-medium text-gray-500 hover:text-blue-600 flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-all">
@@ -219,7 +215,7 @@ function MainApp() {
             </div>
           </div>
 
-          {/* Красивый прогресс-бар */}
+          {/* Прогресс-бар */}
           <div className="flex items-center mt-6 text-xs font-medium">
             <Step num={1} label="Параметры" active={screen === 'input'} done={screen !== 'input'} />
             <div className={`flex-1 h-1 mx-3 rounded-full transition-all duration-500 ${screen !== 'input' ? 'bg-gradient-to-r from-green-400 to-green-500' : 'bg-gray-200 dark:bg-gray-700'}`} />
@@ -244,7 +240,7 @@ function MainApp() {
       )}
 
       <main className="max-w-4xl mx-auto px-6 py-12 relative z-10">
-
+        
         {/* ЭКРАН 1: Ввод */}
         {screen === 'input' && (
           <div className="animate-fade-in-up">
@@ -253,12 +249,12 @@ function MainApp() {
                 Создайте программу за <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">минуты</span>
               </h1>
               <p className="text-lg text-gray-500 dark:text-gray-400 max-w-2xl mx-auto">
-                Укажите тему и объём — ИИ-агент сформирует каркас, компетенции и учебный план, соответствующий стандартам.
+                Укажите тему и объём — ИИ-агент сформирует каркас, компетенции и учебный план.
               </p>
             </div>
 
             <div className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-3xl shadow-2xl shadow-blue-500/5 border border-white dark:border-gray-700 p-8 max-w-2xl mx-auto">
-
+              
               <div className="space-y-6">
                 <div>
                   <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Тема программы</label>
@@ -272,8 +268,8 @@ function MainApp() {
                   />
                   <div className="flex flex-wrap gap-2 mt-3">
                     {["Python", "Frontend", "DevOps", "Data Science", "ML"].map((tag) => (
-                      <button
-                        key={tag}
+                      <button 
+                        key={tag} 
                         onClick={() => setTopic(tag)}
                         className="text-xs font-semibold bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 px-4 py-1.5 rounded-full hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors border border-blue-100 dark:border-blue-800"
                       >
@@ -282,7 +278,7 @@ function MainApp() {
                     ))}
                   </div>
                 </div>
-
+                
                 <div>
                   <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Объём программы (часы)</label>
                   <div className="flex items-center w-full border-2 border-gray-100 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-gray-900 transition-all focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10 overflow-hidden">
@@ -321,7 +317,7 @@ function MainApp() {
                   </div>
                   <p className="text-xs text-gray-400 mt-2 font-medium">Допустимый диапазон: от 16 до 500 часов</p>
                 </div>
-
+                
                 <button
                   onClick={handleGenerate}
                   disabled={loading}
@@ -339,16 +335,6 @@ function MainApp() {
                 </button>
               </div>
             </div>
-
-            {/* Виджет экономии */}
-            <div className="mt-8 flex justify-center gap-6 animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
-              <div className="flex items-center gap-2 text-sm font-medium text-gray-500">
-                <Clock className="w-4 h-4 text-green-500" /> Экономия ~38 часов
-              </div>
-              <div className="flex items-center gap-2 text-sm font-medium text-gray-500">
-                <TrendingUp className="w-4 h-4 text-blue-500" /> ROI до 2.8 млн ₽/год
-              </div>
-            </div>
           </div>
         )}
 
@@ -356,12 +342,13 @@ function MainApp() {
         {screen === 'framework' && framework && (
           <div className="space-y-6 animate-fade-in-up">
             {content?.validation_report?.hours_match !== undefined && (
-              <div className={`p-4 rounded-xl border-l-4 shadow-sm ${content.validation_report.hours_match
-                  ? 'bg-green-50 border-green-500 text-green-800 dark:bg-green-900/20 dark:text-green-300'
+              <div className={`p-4 rounded-xl border-l-4 shadow-sm ${
+                content.validation_report.hours_match 
+                  ? 'bg-green-50 border-green-500 text-green-800 dark:bg-green-900/20 dark:text-green-300' 
                   : 'bg-red-50 border-red-500 text-red-800 dark:bg-red-900/20 dark:text-red-300'
-                }`}>
+              }`}>
                 <h3 className="font-bold flex items-center gap-2">
-                  {content.validation_report.hours_match ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+                  {content.validation_report.hours_match ? <CheckCircle2 className="w-5 h-5"/> : <AlertCircle className="w-5 h-5"/>}
                   {content.validation_report.hours_match ? 'Отчёт автопроверки: Всё совпадает' : 'Внимание: есть расхождения'}
                 </h3>
                 <p className="text-sm mt-1">Сумма часов: <strong>{content.validation_report.calculated_total}</strong> / {content.validation_report.expected_total}</p>
@@ -521,7 +508,7 @@ function MainApp() {
             )}
 
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
-              <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><Download className="w-5 h-5" /> Экспорт материалов</h3>
+              <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><Download className="w-5 h-5"/> Экспорт материалов</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <button onClick={() => handleDownload('docx')} className="flex items-center justify-center gap-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 py-3 rounded-xl font-bold hover:bg-gray-100 dark:hover:bg-gray-700 hover:border-gray-300 transition-all">
                   <FileDown className="w-5 h-5 text-blue-600" /> Word
@@ -545,9 +532,9 @@ function Step({ num, label, active, done }: { num: number; label: string; active
   return (
     <div className="flex items-center gap-2">
       <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-500
-        ${done ? 'bg-green-500 text-white shadow-lg shadow-green-500/30'
-          : active ? 'bg-blue-600 text-white ring-4 ring-blue-500/20 shadow-lg shadow-blue-500/30'
-            : 'bg-gray-200 dark:bg-gray-800 text-gray-500'}`}>
+        ${done ? 'bg-green-500 text-white shadow-lg shadow-green-500/30' 
+          : active ? 'bg-blue-600 text-white ring-4 ring-blue-500/20 shadow-lg shadow-blue-500/30' 
+          : 'bg-gray-200 dark:bg-gray-800 text-gray-500'}`}>
         {done ? <CheckCircle2 className="w-4 h-4" /> : num}
       </div>
       <span className={`font-bold text-sm hidden sm:block ${active ? 'text-blue-600 dark:text-blue-400' : done ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-600'}`}>
