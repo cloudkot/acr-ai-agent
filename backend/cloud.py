@@ -3,6 +3,13 @@ import time
 from openai import OpenAI, APITimeoutError, APIConnectionError
 from fastapi import HTTPException
 
+class LLMServiceError(Exception):
+    """Кастомное исключение для сбоев LLM."""
+    def __init__(self, message: str, status_code: int = 500):
+        self.message = message
+        self.status_code = status_code
+        super().__init__(self.message)
+
 # [ОГРАНИЧЕНИЕ КЕЙСА]: Использование инфраструктуры Cloud.ru
 api_key = os.getenv("OPENAI_API_KEY", "")
 base_url = os.getenv("OPENAI_BASE_URL", "https://hub.gigaschool.ru/api/v1/llm/v1")
@@ -45,8 +52,7 @@ def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False) -> s
             return response.choices[0].message.content
         except (APITimeoutError, APIConnectionError) as e:
             if attempt == 2:
-                # [ТРЕБОВАНИЕ КЕЙСА]: Структурированная ошибка
-                raise HTTPException(status_code=504, detail=f"LLM Timeout after 3 attempts: {str(e)}")
+                raise LLMServiceError(f"Превышено время ожидания LLM: {str(e)}", status_code=504)
             time.sleep(2)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"LLM Error: {str(e)}")
+            raise LLMServiceError(f"Ошибка LLM: {str(e)}", status_code=500)

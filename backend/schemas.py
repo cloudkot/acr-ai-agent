@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import List
+from pydantic import BaseModel, Field
+from typing import List, Literal
 
 # [ТРЕБОВАНИЕ КЕЙСА]: Карта компетенций с разбивкой на знания, умения и навыки.
 class Competency(BaseModel):
@@ -31,3 +31,11 @@ class SeminarTask(BaseModel):
     task: str
     criteria: str
     related_competency: str
+
+class GenerateRequest(BaseModel):
+    topic: str = Field(..., min_length=3, description="Тема программы")
+    hours: int = Field(..., ge=16, le=500, description="Объем программы от 16 до 500 часов")
+    template_type: Literal["ДПО", "Общеразвивающая"] = Field(default="ДПО", description="Тип программы по шаблону АЦР")
+
+class RevisionRequest(BaseModel):
+    instruction: str = Field(..., min_length=5, description="Инструкция по правке каркаса")
