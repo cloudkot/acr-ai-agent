@@ -27,3 +27,9 @@ def test_generate_endpoint(mock_gen):
     assert response.status_code == 200
     assert response.json()["status"] == "waiting_for_approval"
     assert "session_id" in response.json()
+
+def test_generate_invalid_hours():
+    """[ТРЕБОВАНИЕ КЕЙСА]: Тест на обработку сбоев (невалидные часы)."""
+    response = client.post("/api/generate", json={"topic": "Test", "hours": -5})
+    # Так как у нас стоит валидация Pydantic, FastAPI сам вернет 422
+    assert response.status_code == 422

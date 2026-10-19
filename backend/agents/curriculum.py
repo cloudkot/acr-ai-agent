@@ -2,6 +2,9 @@ from cloud import ask_llm
 from schemas import Framework
 from utils.json_parser import extract_json_from_text
 from services.rag_service import search_knowledge_base
+from pydantic import ValidationError
+from logger import logger
+import time
 
 def generate_framework_json(topic: str, hours: int, template_type: str = "ДПО") -> Framework:
     # [ТРЕБОВАНИЕ КЕЙСА]: Вызов RAG с учетом типа программы
@@ -33,7 +36,17 @@ def generate_framework_json(topic: str, hours: int, template_type: str = "ДПО
     
     ВАЖНО: Сумма часов всех модулей ДОЛЖНА быть ровно {hours}. Верни ТОЛЬКО валидный JSON.
     """
-    
+    for attempt in range(2):
+        response_text = ask_llm(prompt, task_type="framework", is_json=True)
+        try:
+            data = extract_json_from_text(response_text)
+            return Framework(**data)
+        except ValidationError as e:
+            logger.warning(f"Ошибка валидации схемы от LLM (попытка {attempt+1}): {e}")
+            if attempt == 1:
+                raise ValueError("LLM не смогла выдать правильный JSON после 2 попыток")
+            time.sleep(1)
+
     response_text = ask_llm(prompt, task_type="framework", is_json=True)
     data = extract_json_from_text(response_text) 
     return Framework(**data)
