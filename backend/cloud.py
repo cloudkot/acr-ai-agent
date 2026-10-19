@@ -1,30 +1,24 @@
 import os
 import time
 from openai import OpenAI, APITimeoutError, APIConnectionError
-from fastapi import HTTPException
-
-class LLMServiceError(Exception):
-    """Кастомное исключение для сбоев LLM."""
-    def __init__(self, message: str, status_code: int = 500):
-        self.message = message
-        self.status_code = status_code
-        super().__init__(self.message)
 
 # [ОГРАНИЧЕНИЕ КЕЙСА]: Использование инфраструктуры Cloud.ru
 api_key = os.getenv("OPENAI_API_KEY", "")
 base_url = os.getenv("OPENAI_BASE_URL", "https://hub.gigaschool.ru/api/v1/llm/v1")
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Таймаут для предотвращения зависаний
-client = OpenAI(api_key=api_key, base_url=base_url, timeout=60.0)
+client = OpenAI(api_key=api_key or "dummy", base_url=base_url, timeout=60.0)
 
 MODEL_FAST = "GigaChat/GigaChat-3-Pro"
 MODEL_REASONING = "ai-sage/GigaChat3.5-432B-A28B-Reasoning"
 
+# [ТРЕБОВАНИЕ КЕЙСА]: Кастомное исключение для структурированной обработки ошибок
+class LLMServiceError(Exception):
+    def __init__(self, message: str, status_code: int = 500):
+        self.message = message
+        self.status_code = status_code
+        super().__init__(self.message)
+
 class LLMRouter:
-    """
-    [АРХИТЕКТУРА]: LLM Router. 
-    Выбирает модель в зависимости от сложности задачи для экономии токенов.
-    """
     @staticmethod
     def get_model_for_task(task_type: str) -> str:
         if task_type in ["framework", "validation", "revision"]:
@@ -32,9 +26,6 @@ class LLMRouter:
         return MODEL_FAST
 
 def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False) -> str:
-    """
-    [ТРЕБОВАНИЕ КЕЙСА]: Отказоустойчивость. Реализованы повторные попытки (retries).
-    """
     model = LLMRouter.get_model_for_task(task_type)
     
     kwargs = {
@@ -45,7 +36,7 @@ def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False) -> s
     if is_json:
         kwargs["response_format"] = {"type": "json_object"}
 
-    # [ТРЕБОВАНИЕ КЕЙСА]: 3 попытки при сбоях
+    # [ТРЕБОВАНИЕ КЕЙСА]: 3 попытки (retries) при сбоях
     for attempt in range(3):
         try:
             response = client.chat.completions.create(**kwargs)
