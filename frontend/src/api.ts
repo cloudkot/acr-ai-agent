@@ -42,6 +42,26 @@ export interface GenerateResponse {
   framework: Framework;
 }
 
+export interface Seminar {
+  task: string;
+  criteria: string;
+}
+
+export interface WorkProgram {
+  module_title: string;
+  // Бэкенд может присылать разные поля, поэтому делаем опциональными
+  description?: string;
+  topics?: string[];
+  hours?: number;
+}
+
+export interface BibliographyItem {
+  title: string;
+  author?: string;
+  year?: string;
+  url?: string;
+}
+
 export interface ContentData {
   tests?: {
     questions?: Array<{
@@ -51,16 +71,17 @@ export interface ContentData {
       related_competency?: string;
     }>;
   };
-  seminars?: {
-    task?: string;
-    criteria?: string;
-  };
+  // ИСПРАВЛЕНО: теперь массив семинаров
+  seminars?: Seminar[];
   lectures?: {
     modules_plan?: Array<{
       module_title: string;
       theses: string[];
     }>;
   };
+  // НОВЫЕ АРТЕФАКТЫ
+  work_programs?: WorkProgram[];
+  bibliography?: BibliographyItem[];
 }
 
 export interface ContentResponse {
@@ -74,7 +95,7 @@ export interface ContentResponse {
 export async function uploadReference(file: File): Promise<{ full_text: string; filename: string }> {
   const formData = new FormData();
   formData.append('file', file);
-  const res = await fetch(`${BASE_URL}/upload`, {
+  const res = await fetch(`${BASE_URL}/upload-reference`, {
     method: 'POST',
     body: formData,
   });
@@ -82,7 +103,7 @@ export async function uploadReference(file: File): Promise<{ full_text: string; 
   return res.json();
 }
 
-// 1. Генерация каркаса (ИСПРАВЛЕНО: добавлены template_type и reference_text)
+// 1. Генерация каркаса
 export async function generateFramework(
   topic: string, 
   hours: number, 
@@ -145,7 +166,7 @@ export async function approveFramework(sessionId: string): Promise<ContentRespon
   return res.json();
 }
 
-// 4. Скачивание файлов (ИСПРАВЛЕНО: теперь GET через window.location.href)
+// 4. Скачивание файлов (GET)
 export function downloadFile(sessionId: string, type: 'docx' | 'pptx' | 'lms' | 'json') {
   window.location.href = `${BASE_URL}/export-${type}/${sessionId}`;
 }

@@ -4,7 +4,7 @@ import {
   Loader2, ArrowRight, CheckCircle2, Download, 
   FileText, BookOpen, GraduationCap, RotateCcw, 
   Sparkles, FileDown, Presentation, Moon, Sun,
-  Minus, Plus, AlertCircle, Paperclip, X
+  Minus, Plus, AlertCircle, Paperclip, X, Library
 } from 'lucide-react';
 import { 
   generateFramework, 
@@ -66,7 +66,6 @@ function MainApp() {
   const [reviseText, setReviseText] = useState('');
   const [revising, setRevising] = useState(false);
 
-  // Референсы
   const [referenceFile, setReferenceFile] = useState<File | null>(null);
   const [referenceText, setReferenceText] = useState<string>('');
   const [uploadingFile, setUploadingFile] = useState(false);
@@ -139,7 +138,6 @@ function MainApp() {
     setError(null);
     setLoading(true);
     try {
-      // Передаем 'auto' и текст референса
       const res = await generateFramework(topic.trim(), finalHours, 'auto', referenceText || undefined);
       setSessionId(res.session_id);
       setFramework(res.framework);
@@ -275,7 +273,6 @@ function MainApp() {
             </div>
 
             <div className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-3xl shadow-2xl shadow-blue-500/5 border border-white dark:border-gray-700 p-8 max-w-2xl mx-auto">
-              
               <div className="space-y-6">
                 <div>
                   <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Тема программы</label>
@@ -300,7 +297,6 @@ function MainApp() {
                   </div>
                 </div>
 
-                {/* Загрузка референсов */}
                 <div>
                   <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Референсы (опционально)</label>
                   {!referenceFile ? (
@@ -425,14 +421,14 @@ function MainApp() {
               </div>
             )}
 
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6 transition-all hover:shadow-xl">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
               <div className="flex items-center gap-2 text-xs font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest mb-3">
                 <GraduationCap className="w-4 h-4" /> Цель программы
               </div>
               <p className="text-lg font-medium text-gray-800 dark:text-gray-200 leading-relaxed">{framework.goal || 'Цель не указана'}</p>
             </div>
 
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6 transition-all hover:shadow-xl">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
               <div className="flex items-center gap-2 text-xs font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest mb-4">
                 <BookOpen className="w-4 h-4" /> Модули программы
               </div>
@@ -449,7 +445,7 @@ function MainApp() {
               </div>
             </div>
 
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6 transition-all hover:shadow-xl">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
               <div className="flex items-center gap-2 text-xs font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest mb-4">
                 <CheckCircle2 className="w-4 h-4" /> Карта компетенций
               </div>
@@ -513,6 +509,7 @@ function MainApp() {
               </div>
             </div>
 
+            {/* Тесты */}
             {content.content?.tests?.questions && content.content.tests.questions.length > 0 && (
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
                 <div className="flex items-center justify-between mb-6">
@@ -543,21 +540,78 @@ function MainApp() {
               </div>
             )}
 
-            {content.content?.seminars?.task && (
+            {/* Семинары (теперь массив) */}
+            {content.content?.seminars && content.content.seminars.length > 0 && (
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
-                <div className="flex items-center gap-2 text-sm font-bold text-orange-600 dark:text-orange-400 uppercase tracking-widest mb-4">
-                  <FileText className="w-5 h-5" /> Семинар
-                </div>
-                <p className="text-gray-800 dark:text-gray-200 mb-4 font-medium">{content.content.seminars.task}</p>
-                {content.content.seminars.criteria && (
-                  <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-xl text-sm text-orange-900 dark:text-orange-200 border border-orange-200 dark:border-orange-800/50">
-                    <strong className="block mb-1">Критерии оценки:</strong>
-                    <p className="whitespace-pre-wrap">{content.content.seminars.criteria}</p>
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-2 text-sm font-bold text-orange-600 dark:text-orange-400 uppercase tracking-widest">
+                    <FileText className="w-5 h-5" /> Семинары
                   </div>
-                )}
+                  <span className="bg-orange-50 dark:bg-orange-900/30 text-orange-600 dark:text-orange-300 px-3 py-1 rounded-full text-xs font-bold">
+                    {content.content.seminars.length} заданий
+                  </span>
+                </div>
+                <div className="space-y-4">
+                  {content.content.seminars.map((seminar, idx) => (
+                    <div key={idx} className="bg-orange-50/50 dark:bg-orange-900/10 p-5 rounded-xl border border-orange-100 dark:border-orange-900/30">
+                      <p className="font-bold text-orange-900 dark:text-orange-200 mb-2">Семинар {idx + 1}: {seminar.task}</p>
+                      {seminar.criteria && (
+                        <div className="text-sm text-orange-800 dark:text-orange-300 bg-white/50 dark:bg-gray-800/50 p-3 rounded-lg">
+                          <strong className="block mb-1">Критерии оценки:</strong>
+                          <p className="whitespace-pre-wrap">{seminar.criteria}</p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
+            {/* Рабочие программы (НОВОЕ) */}
+            {content.content?.work_programs && content.content.work_programs.length > 0 && (
+              <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
+                <div className="flex items-center gap-2 text-sm font-bold text-teal-600 dark:text-teal-400 uppercase tracking-widest mb-4">
+                  <BookOpen className="w-5 h-5" /> Рабочие программы
+                </div>
+                <div className="space-y-4">
+                  {content.content.work_programs.map((wp, idx) => (
+                    <div key={idx} className="border-l-4 border-teal-400 pl-4 py-1">
+                      <h4 className="font-bold text-gray-800 dark:text-gray-200 text-lg mb-1">{wp.module_title}</h4>
+                      {wp.description && <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">{wp.description}</p>}
+                      {wp.topics && wp.topics.length > 0 && (
+                        <ul className="list-disc list-inside text-sm text-gray-600 dark:text-gray-400 space-y-1">
+                          {wp.topics.map((t, i) => <li key={i}>{t}</li>)}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Библиография (НОВОЕ) */}
+            {content.content?.bibliography && content.content.bibliography.length > 0 && (
+              <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
+                <div className="flex items-center gap-2 text-sm font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-4">
+                  <Library className="w-5 h-5" /> Библиография
+                </div>
+                <ul className="space-y-2 text-sm">
+                  {content.content.bibliography.map((item, idx) => (
+                    <li key={idx} className="flex items-start gap-2 text-gray-700 dark:text-gray-300">
+                      <span className="text-indigo-500 font-bold mt-0.5">[{idx + 1}]</span>
+                      <span>
+                        {item.author && <span className="font-medium">{item.author}. </span>}
+                        <span className="italic">«{item.title}»</span>
+                        {item.year && <span>. — {item.year}.</span>}
+                        {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-blue-500 underline ml-2">Ссылка</a>}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Планы лекций */}
             {content.content?.lectures?.modules_plan && content.content.lectures.modules_plan.length > 0 && (
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
                 <div className="flex items-center gap-2 text-sm font-bold text-purple-600 dark:text-purple-400 uppercase tracking-widest mb-4">
