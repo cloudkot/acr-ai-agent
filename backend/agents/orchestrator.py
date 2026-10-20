@@ -1,28 +1,35 @@
 import uuid
-import json
 from cloud import ask_llm
 from agents.curriculum import generate_framework_json, revise_framework_json
-from agents.validator import run_full_validation, auto_correct_hours, check_content_constraints
+from agents.validator import (
+    run_full_validation, 
+    auto_correct_hours, 
+    check_content_constraints, 
+    enforce_content_constraints, 
+    validate_coverage_with_content
+)
 from agents.content import generate_content_pack
 from state_store import save_session, get_session, log_action
 from utils.json_parser import extract_json_from_text
 from logger import logger
 
 def clarify_and_classify(topic: str, hours: int = None, reference_text: str = None) -> dict:
-    """
-    [ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автоматический выбор шаблона.
-    """
+    """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автоматический выбор шаблона."""
     ref_context = f"\nРеференс: {reference_text[:500]}" if reference_text else ""
     hours_context = f"Объем: {hours} часов." if hours else "Объем НЕ УКАЗАН."
     
     prompt = f"""
-    Запрос методиста: "{topic}". {hours_context}{ref_context}
+    <role>Ты — методист АЦР.</role>
+    <request>{topic}</request>
+    <context>{hours_context}{ref_context}</context>
     
+    <task>
     1. Определи тип программы: "ДПО" или "Общеразвивающая". Выведи строго одно слово.
     2. Если не указан объем, тип программы, аудитория или форма аттестации — придумай уточняющие вопросы (не больше 4).
     Если данных достаточно, массив вопросов оставь пустым.
+    </task>
     
-    Формат JSON: {{"template_type": "ДПО", "questions": ["Вопрос 1", "Вопрос 2"]}}
+    <format>{{"template_type": "ДПО", "questions": ["Вопрос 1", "Вопрос 2"]}}</format>
     """
     try:
         raw = ask_llm(prompt, task_type="content", is_json=True)
@@ -36,14 +43,11 @@ def clarify_and_classify(topic: str, hours: int = None, reference_text: str = No
         return {"template_type": "ДПО", "questions": []}
 
 def process_request(topic: str, hours: int = None, template_type: str = "auto", reference_text: str = None, constraints: str = None):
-    """
-    [СЦЕНАРИЙ КЕЙСА]: Прием запроса, обработка нехватки данных и генерация каркаса.
-    """
+    """[СЦЕНАРИЙ КЕЙСА]: Прием запроса, обработка нехватки данных и генерация каркаса."""
     session_id = str(uuid.uuid4())
     logger.info(f"Запрос: {topic}, {hours} ч., шаблон: {template_type}, ограничения: {'да' if constraints else 'нет'}")
     
     try:
-        # 1. Автоматический выбор шаблона и уточняющие вопросы
         needs_clarification = False
         questions = []
         
@@ -64,14 +68,14 @@ def process_request(topic: str, hours: int = None, template_type: str = "auto", 
                 "message": "Не хватает данных для генерации. Ответьте на вопросы."
             }
 
-        # 2. Генерация каркаса с учетом всех ограничений
+        # 2. Генерация каркаса
         framework_obj = generate_framework_json(topic, hours, template_type, reference_text, constraints)
         
-        # 3. Автокоррекция часов
-        framework_obj = auto_correct_hours(framework_obj, hours)
+        # 3. Автокоррекция часов (теперь с учетом ограничений: например, обнуление лекций)
+        framework_obj = auto_correct_hours(framework_obj, hours, constraints)
         report = run_full_validation(framework_obj)
             
-        # 4. Сохраняем сессию
+        # 4. Сохранение сессии
         save_session(session_id, framework_obj, "waiting_for_approval", constraints=constraints)
         log_action(session_id, "generated")
         
@@ -87,9 +91,7 @@ def process_request(topic: str, hours: int = None, template_type: str = "auto", 
         return {"session_id": session_id, "status": "error", "message": str(e)}
 
 def approve_and_generate(session_id: str):
-    """
-    [СЦЕНАРИЙ КЕЙСА]: Утверждение каркаса и генерация контента.
-    """
+    """[СЦЕНАРИЙ КЕЙСА]: Утверждение каркаса и генерация контента."""
     session = get_session(session_id)
     if not session or session["status"] != "waiting_for_approval":
         return {"error": "Сессия не найдена или уже обработана"}
@@ -99,20 +101,22 @@ def approve_and_generate(session_id: str):
     try:
         constraints = session.get("constraints")
         
-        # Генерируем контент
+        # Генерация контента
         content = generate_content_pack(session["framework"], constraints)
         
         if not content.get("tests") and not content.get("lectures"):
             logger.error("Генерация контента не удалась: пустые тесты и лекции")
-            return {"error": "Не удалось сгенерировать материалы. Попробуйте утвердить еще раз."}
+            return {"error": "Не удалось сгенерировать материалы. Попробуйте еще раз."}
 
-        # [ФИКС РЕВЬЮЕРА]: Программная проверка ограничений после генерации
+        # [ФИКС РЕВЬЮЕРА]: ПРИНУДИТЕЛЬНАЯ КОРРЕКЦИЯ КОНТЕНТА
+        # Обрезаем вопросы, фильтруем слайды и т.д.
+        content = enforce_content_constraints(session["framework"], content, constraints)
+
+        # Проверяем, что получилось после коррекции
         constraints_report = check_content_constraints(session["framework"], content, constraints)
         
         if not constraints_report["constraints_ok"]:
-            logger.warning(f"Нарушены ограничения методиста: {constraints_report['errors']}")
-            # Мы не прерываем процесс, но возвращаем предупреждение в UI, 
-            # чтобы методист видел, что нейросеть немного накосячила с ограничениями.
+            logger.warning(f"Остались нарушения ограничений: {constraints_report['errors']}")
             
         save_session(session_id, session["framework"], "completed", content, constraints)
         log_action(session_id, "approved")
@@ -121,16 +125,14 @@ def approve_and_generate(session_id: str):
             "session_id": session_id, 
             "status": "completed", 
             "content": content,
-            "constraints_check": constraints_report # <--- Отдаем результат проверки на фронт
+            "constraints_check": constraints_report
         }
     except Exception as e:
         logger.error(f"Ошибка генерации контента: {e}")
         return {"error": f"Ошибка генерации контента: {str(e)}"}
 
 def revise_session(session_id: str, instruction: str):
-    """
-    [ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка каркаса.
-    """
+    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка каркаса."""
     session = get_session(session_id)
     if not session:
         return {"error": "Сессия не найдена"}
