@@ -5,108 +5,54 @@ from utils.json_parser import extract_json_from_text
 from services.rag_service import search_knowledge_base
 from logger import logger
 
-def generate_framework_json(
-    topic: str, 
-    hours: int, 
-    template_type: str = "ДПО", 
-    reference_text: str = None,
-    constraints: str = None
+def def generate_framework_json(
+    topic: str, hours: int, template_type: str = "ДПО", reference_text: str = None, constraints: str = None
 ) -> Framework:
-    """
-    [АРХИТЕКТУРА]: Curriculum Architect.
-    [ТРЕБОВАНИЕ КЕЙСА]: Учет шаблона, референсов, ограничений и защита от математических ошибок.
-    """
-    # 1. ML RAG (поиск по нормативной базе)
+    
+    # 1. Снижение токенов: передаем только суть референса (первые 1500 символов)
+    ref_context = f"<reference>{reference_text[:1500]}</reference>" if reference_text else ""
+    constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""
     rag_context = search_knowledge_base(topic, template_type)
-    
-    # 2. Подготовка контекста из референса и ограничений
-    ref_context = ""
-    if reference_text:
-        ref_context = f"\nВНИМАНИЕ! УЧТИ СТРУКТУРУ ЭТОГО РЕФЕРЕНСА, НО НЕ КОПИРУЙ ИЗ НЕГО ОШИБКИ В ЧАСАХ:\n{reference_text[:4000]}\n"
-    
-    constraints_context = ""
-    if constraints:
-        constraints_context = f"\nОСОБЫЕ ТРЕБОВАНИЯ МЕТОДИСТА (СТРОГО СОБЛЮДАТЬ):\n{constraints}\n"
 
-    # 3. Формируем строгий промпт с учетом специфики ДПО и Общеразвивающих программ
+    # 2. Промпт-инжиниринг: четкая структура, роли, запреты и пример
     prompt = f"""
-    Ты — старший методист Академии цифрового развития (АЦР).
+    <role>Ты — экспертный методист Академии цифрового развития (АЦР).</role>
     
-    ПАРАМЕТРЫ ЗАПРОСА:
-    - Тема: {topic}
-    - Общий объем: {hours} часов
-    - Тип программы: {template_type}
-    
-    НОРМАТИВНАЯ БАЗА (Используй в поле "goal"):
-    {rag_context}
-    {ref_context}
+    <input>
+    <topic>{topic}</topic>
+    <hours>{hours}</hours>
+    <template_type>{template_type}</template_type>
     {constraints_context}
+    {ref_context}
+    </input>
     
-    ПРАВИЛА ФОРМИРОВАНИЯ КАРКАСА:
-    1. Если тип "Общеразвивающая" (например, для школьников): 
-       - ЗАПРЕЩЕНО указывать профстандарты и трудовые функции (оставь "prof_standard": null).
-       - Сделай упор на общие навыки и проектную деятельность.
-    2. Если тип "ДПО" (повышение квалификации, стажировка):
-       - ОБЯЗАТЕЛЬНО укажи реальный профстандарт и код трудовой функции в поле "prof_standard" (например, "Профстандарт 06.001, код A/01.6").
-    3. Если в требованиях сказано "без аудиторных занятий" или "только самостоятельная работа" (как в стажировках):
-       - Поля "lectures" (лекции), "practice" (практики) и "labs" (лабораторные) должны быть равны 0.
-       - Все часы перенеси в "srs" (самостоятельная работа).
-    4. АРИФМЕТИКА (КРИТИЧЕСКИ ВАЖНО):
-       - Сумма часов всех модулей + часы итоговой аттестации ("final_assessment_hours") ДОЛЖНА быть ровно {hours}.
-       - Внутри каждого модуля: "total_hours" должно быть равно сумме (lectures + practice + labs + srs).
+    <normative_base>
+    {rag_context}
+    </normative_base>
     
-    Формат ответа — СТРОГИЙ JSON (без markdown-разметки):
+    <rules>
+    1. Если template_type = "Общеразвивающая", поле "prof_standard" СТРОГО null.
+    2. Если в constraints есть требование к часам (например, "без лекций"), распредели часы ТОЛЬКО в указанные поля (лекции, практики, лабораторные, СРС).
+    3. АРИФМЕТИКА: Сумма модулей + final_assessment_hours = {hours}. Внутри модуля: lectures+practice+labs+srs = total_hours.
+    4. НЕ пиши ничего, кроме JSON. Никаких "Вот ваш JSON:" или markdown-тегов ```json. Только сырой JSON.
+    </rules>
+    
+    <few_shot_example>
     {{
-        "goal": "строка с нормативной базой",
-        "template_type": "{template_type}",
-        "prof_standard": "строка или null",
-        "final_assessment_hours": число (обычно 2 или 4),
-        "modules": [
-            {{
-                "title": "Название модуля",
-                "total_hours": число,
-                "lectures": число,
-                "practice": число,
-                "labs": число,
-                "srs": число
-            }}
-        ],
-        "total_hours": {hours},
-        "competencies": [
-            {{"name": "строка", "knowledge": ["строка"], "skills": ["строка"]}}
-        ]
+      "goal": "Программа на основе 273-ФЗ",
+      "template_type": "ДПО",
+      "prof_standard": "Профстандарт 06.001",
+      "final_assessment_hours": 2,
+      "modules": [
+        {{"title": "Введение", "total_hours": 34, "lectures": 10, "practice": 10, "labs": 0, "srs": 14}}
+      ],
+      "total_hours": 36,
+      "competencies": [{{"name": "Python", "knowledge": ["Синтаксис"], "skills": ["Писать код"]}}]
     }}
-    """
+    </few_shot_example>
     
-    # 4. Генерация с ретраями
-    for attempt in range(3):
-        try:
-            response_text = ask_llm(prompt, task_type="framework", is_json=True)
-            data = extract_json_from_text(response_text)
-            
-            # Принудительно выставляем общий объем и тип, чтобы LLM не обманула
-            data["total_hours"] = hours
-            data["template_type"] = template_type
-            
-            # Защита от галлюцинаций с профстандартами
-            if template_type == "Общеразвивающая":
-                data["prof_standard"] = None
-            elif not data.get("prof_standard"):
-                data["prof_standard"] = "[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК] Профстандарт не указан"
-            
-            framework_obj = Framework(**data)
-            
-            # Очистка названий компетенций от лишних тегов
-            for comp in framework_obj.competencies:
-                comp.name = comp.name.replace("[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]", "").strip()
-                
-            return framework_obj
-            
-        except Exception as e:
-            logger.warning(f"Ошибка парсинга JSON от LLM (попытка {attempt+1}): {e}")
-            if attempt == 2:
-                raise ValueError(f"LLM не смогла выдать правильный JSON после 3 попыток. Ошибка: {e}")
-            time.sleep(1.5)
+    Сгенерируй JSON по аналогии с few_shot_example, соблюдая все <rules>.
+    """
 
 def revise_framework_json(current_framework: Framework, instruction: str) -> Framework:
     """

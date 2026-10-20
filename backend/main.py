@@ -11,7 +11,7 @@ from agents.orchestrator import process_request, approve_and_generate, revise_se
 from state_store import get_session, init_db
 from export import export_to_docx, export_to_pptx, export_tests_to_lms, export_to_json
 from services.reference_parser import save_and_parse_reference
-from agents.validator import run_full_validation, validate_coverage_with_content
+from agents.validator import run_full_validation, validate_coverage_with_content, check_content_constraints
 from schemas import GenerateRequest, RevisionRequest
 from cloud import LLMServiceError
 
@@ -77,10 +77,7 @@ def clarify_endpoint(req: ClarifyRequest):
 
 @app.post("/api/generate")
 def generate_framework_endpoint(req: GenerateRequest):
-    """
-    Шаг 1: Прием запроса, референсов, ограничений и генерация каркаса.
-    Если часа нет — вернет статус clarification_needed.
-    """
+    """Шаг 1: Прием запроса, референсов, ограничений и генерация каркаса."""
     return process_request(
         topic=req.topic, 
         hours=req.hours, 
@@ -112,6 +109,10 @@ def get_validation_report(session_id: str):
         coverage = validate_coverage_with_content(session["framework"], session["content"])
         base_report["deep_coverage"] = coverage
         
+        # Добавляем проверку ограничений в общий отчет
+        c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
+        base_report["constraints_check"] = c_check
+        
     return {"session_id": session_id, "report": base_report}
 
 @app.post("/api/upload-reference")
@@ -125,15 +126,19 @@ async def upload_reference(file: UploadFile = File(...)):
         "full_text": text
     }
 
-# --- ЭКСПОРТ ФАЙЛОВ (Строго GET для прямых ссылок) ---
+# --- ЭКСПОРТ ФАЙЛОВ (Строго GET) ---
 
 @app.get("/api/export-docx/{session_id}")
 def export_docx_endpoint(session_id: str):
     session = get_session(session_id)
     if not session or session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Сессия не готова")
+    
+    # [ФИКС РЕВЬЮЕРА]: Вычисляем ограничения на лету и передаем в экспорт
+    c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
+    
     filename = f"program_{session_id[:8]}.docx"
-    export_to_docx(session["framework"], session["content"], filename)
+    export_to_docx(session["framework"], session["content"], filename, constraints_check=c_check)
     return FileResponse(filename, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename=filename)
 
 @app.get("/api/export-pptx/{session_id}")
@@ -141,8 +146,11 @@ def export_pptx_endpoint(session_id: str):
     session = get_session(session_id)
     if not session or session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Контент не сгенерирован")
+        
+    c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
+    
     filename = f"presentation_{session_id[:8]}.pptx"
-    export_to_pptx(session["framework"], session["content"], filename)
+    export_to_pptx(session["framework"], session["content"], filename, constraints_check=c_check)
     return FileResponse(filename, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation", filename=filename)
 
 @app.get("/api/export-lms/{session_id}")
@@ -156,12 +164,14 @@ def export_lms_endpoint(session_id: str):
 
 @app.get("/api/export-json/{session_id}")
 def export_json_endpoint(session_id: str):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Выгрузка всего комплекта в JSON."""
     session = get_session(session_id)
     if not session or not session["content"]:
         raise HTTPException(status_code=400, detail="Контент не сгенерирован")
+        
+    c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
+    
     filename = f"bundle_{session_id[:8]}.json"
-    export_to_json(session["framework"], session["content"], filename)
+    export_to_json(session["framework"], session["content"], filename, constraints_check=c_check)
     return FileResponse(filename, media_type="application/json", filename=filename)
 
 # --- РАЗДАЧА ФРОНТЕНДА ---

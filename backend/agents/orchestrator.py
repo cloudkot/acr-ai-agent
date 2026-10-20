@@ -2,7 +2,7 @@ import uuid
 import json
 from cloud import ask_llm
 from agents.curriculum import generate_framework_json, revise_framework_json
-from agents.validator import run_full_validation, auto_correct_hours
+from agents.validator import run_full_validation, auto_correct_hours, check_content_constraints
 from agents.content import generate_content_pack
 from state_store import save_session, get_session, log_action
 from utils.json_parser import extract_json_from_text
@@ -11,7 +11,6 @@ from logger import logger
 def clarify_and_classify(topic: str, hours: int = None, reference_text: str = None) -> dict:
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автоматический выбор шаблона.
-    Срабатывает, если в запросе нет часов (как в Запросе 4) или типа программы.
     """
     ref_context = f"\nРеференс: {reference_text[:500]}" if reference_text else ""
     hours_context = f"Объем: {hours} часов." if hours else "Объем НЕ УКАЗАН."
@@ -45,7 +44,6 @@ def process_request(topic: str, hours: int = None, template_type: str = "auto", 
     
     try:
         # 1. Автоматический выбор шаблона и уточняющие вопросы
-        # Если часы не переданы, мы ОБЯЗАНЫ задать вопросы (Запрос 4)
         needs_clarification = False
         questions = []
         
@@ -55,7 +53,6 @@ def process_request(topic: str, hours: int = None, template_type: str = "auto", 
                 template_type = classification["template_type"]
             questions = classification["questions"]
             
-            # Если часов нет, мы не можем строить каркас
             if hours is None:
                 needs_clarification = True
 
@@ -70,11 +67,11 @@ def process_request(topic: str, hours: int = None, template_type: str = "auto", 
         # 2. Генерация каркаса с учетом всех ограничений
         framework_obj = generate_framework_json(topic, hours, template_type, reference_text, constraints)
         
-        # 3. Автокоррекция часов (чтобы сумма модулей + аттестация = hours)
+        # 3. Автокоррекция часов
         framework_obj = auto_correct_hours(framework_obj, hours)
         report = run_full_validation(framework_obj)
             
-        # 4. Сохраняем сессию (включая ограничения, чтобы использовать их на шаге approve)
+        # 4. Сохраняем сессию
         save_session(session_id, framework_obj, "waiting_for_approval", constraints=constraints)
         log_action(session_id, "generated")
         
@@ -100,21 +97,32 @@ def approve_and_generate(session_id: str):
     logger.info(f"Каркас {session_id} утвержден. Генерация контента...")
     
     try:
-        # Достаем ограничения из сессии (например, "10 вопросов", "слайды для pandas")
         constraints = session.get("constraints")
         
-        # Генерируем контент с учетом ограничений
+        # Генерируем контент
         content = generate_content_pack(session["framework"], constraints)
         
-        # Защита от пустого контента
         if not content.get("tests") and not content.get("lectures"):
             logger.error("Генерация контента не удалась: пустые тесты и лекции")
             return {"error": "Не удалось сгенерировать материалы. Попробуйте утвердить еще раз."}
+
+        # [ФИКС РЕВЬЮЕРА]: Программная проверка ограничений после генерации
+        constraints_report = check_content_constraints(session["framework"], content, constraints)
+        
+        if not constraints_report["constraints_ok"]:
+            logger.warning(f"Нарушены ограничения методиста: {constraints_report['errors']}")
+            # Мы не прерываем процесс, но возвращаем предупреждение в UI, 
+            # чтобы методист видел, что нейросеть немного накосячила с ограничениями.
             
         save_session(session_id, session["framework"], "completed", content, constraints)
         log_action(session_id, "approved")
         
-        return {"session_id": session_id, "status": "completed", "content": content}
+        return {
+            "session_id": session_id, 
+            "status": "completed", 
+            "content": content,
+            "constraints_check": constraints_report # <--- Отдаем результат проверки на фронт
+        }
     except Exception as e:
         logger.error(f"Ошибка генерации контента: {e}")
         return {"error": f"Ошибка генерации контента: {str(e)}"}
