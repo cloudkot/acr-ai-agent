@@ -47,7 +47,7 @@ async def llm_exception_handler(request: Request, exc: LLMServiceError):
         content={"error": "LLM Error", "detail": exc.message}
     )
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Валидация базового URL моделей при старте
+# [ТРЕБОВАНИЕ КЕЙСА]: Валидация URL моделей при старте
 @app.on_event("startup")
 def startup_event():
     init_db()
@@ -66,24 +66,27 @@ def health_check():
 
 class ClarifyRequest(BaseModel):
     topic: str
-    hours: int = 72 # Дефолт для уточнения
+    hours: int | None = None
 
 @app.post("/api/clarify")
 def clarify_endpoint(req: ClarifyRequest):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автовыбор шаблона."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автовыбор шаблона до генерации."""
     return clarify_and_classify(req.topic, req.hours)
 
 # --- ОСНОВНОЙ СЦЕНАРИЙ ---
 
 @app.post("/api/generate")
 def generate_framework_endpoint(req: GenerateRequest):
-    """Шаг 1: Прием запроса, референсов и генерация каркаса."""
-    # Передаем reference_text в оркестратор
+    """
+    Шаг 1: Прием запроса, референсов, ограничений и генерация каркаса.
+    Если часа нет — вернет статус clarification_needed.
+    """
     return process_request(
         topic=req.topic, 
         hours=req.hours, 
         template_type=req.template_type, 
-        reference_text=req.reference_text
+        reference_text=req.reference_text,
+        constraints=req.constraints
     )
 
 @app.post("/api/revise/{session_id}")
@@ -113,19 +116,16 @@ def get_validation_report(session_id: str):
 
 @app.post("/api/upload-reference")
 async def upload_reference(file: UploadFile = File(...)):
-    """
-    [ТРЕБОВАНИЕ КЕЙСА]: Прием референсов (.docx / .pdf / .txt).
-    Возвращает полный текст, чтобы фронтенд передал его в /api/generate.
-    """
+    """[ТРЕБОВАНИЕ КЕЙСА]: Прием референсов (.docx / .pdf / .txt)."""
     text = await save_and_parse_reference(file)
     return {
         "status": "success", 
         "filename": file.filename,
         "text_preview": text[:200],
-        "full_text": text # <--- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ДЛЯ DEEPSEEK
+        "full_text": text
     }
 
-# --- ЭКСПОРТ ФАЙЛОВ (GET методы) ---
+# --- ЭКСПОРТ ФАЙЛОВ (Строго GET для прямых ссылок) ---
 
 @app.get("/api/export-docx/{session_id}")
 def export_docx_endpoint(session_id: str):

@@ -6,36 +6,35 @@ class Competency(BaseModel):
     knowledge: List[str] = Field(..., min_items=1)
     skills: List[str] = Field(..., min_items=1)
 
+# [ТРЕБОВАНИЕ КЕЙСА]: Детализация часов по видам работ
 class Module(BaseModel):
     title: str = Field(..., min_length=3)
-    hours: int = Field(..., gt=0)
+    total_hours: int = Field(..., gt=0)
+    lectures: int = Field(default=0, ge=0)
+    practice: int = Field(default=0, ge=0)
+    labs: int = Field(default=0, ge=0)
+    srs: int = Field(default=0, ge=0) # Самостоятельная работа
 
 class Framework(BaseModel):
-    goal: str = Field(..., min_length=10, max_length=300)
+    goal: str = Field(..., min_length=10)
+    template_type: Literal["ДПО", "Общеразвивающая"]
+    prof_standard: Optional[str] = Field(default=None, description="Код и название профстандарта (только для ДПО)")
     competencies: List[Competency] = Field(..., min_items=1)
     modules: List[Module] = Field(..., min_items=1)
     total_hours: int = Field(..., ge=16, le=500)
-
-# [ТРЕБОВАНИЕ КЕЙСА]: Структурированный тест
-class TestQuestion(BaseModel):
-    question: str
-    options: List[str]
-    correct_answer: str
-    related_competency: str
-    is_source_unverified: bool = False # Флаг, что источник не подтвержден
-
-class SeminarTask(BaseModel):
-    task: str
-    criteria: str
-    related_competency: str
+    final_assessment_hours: int = Field(default=2, ge=0)
 
 class GenerateRequest(BaseModel):
-    topic: str = Field(..., min_length=3, max_length=100)
-    hours: int = Field(..., ge=16, le=500, description="Объем программы")
-    # [ТРЕБОВАНИЕ КЕЙСА]: По умолчанию 'auto', чтобы включить автоклассификатор
-    template_type: Literal["ДПО", "Общеразвивающая", "auto"] = Field(default="auto")
-    # [ТРЕБОВАНИЕ КЕЙСА]: Поле для передачи распарсенного текста референса
-    reference_text: Optional[str] = Field(default=None, max_length=5000)
+    topic: str = Field(..., min_length=3)
+    hours: Optional[int] = Field(default=None, ge=16, le=500)
+    template_type: Optional[Literal["ДПО", "Общеразвивающая", "auto"]] = Field(default="auto")
+    reference_text: Optional[str] = Field(default=None, max_length=15000)
+    constraints: Optional[str] = Field(default=None, description="Доп. требования, например '10 вопросов', 'только отечественные сервисы'")
+
+class ClarifyResponse(BaseModel):
+    status: str = "clarification_needed"
+    questions: List[str]
+    session_id: str
 
 class RevisionRequest(BaseModel):
     instruction: str = Field(..., min_length=5)
