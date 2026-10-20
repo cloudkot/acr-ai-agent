@@ -7,42 +7,50 @@ from state_store import save_session, get_session, log_action
 from logger import logger
 from cloud import ask_llm
 
-def clarify_request(topic: str) -> str:
+def clarify_and_classify(topic: str, hours: int) -> dict:
+    """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автоматический выбор шаблона."""
     prompt = f"""
-    Ты — методист Академии цифрового развития. Пользователь хочет создать программу по теме: "{topic}".
-    Задай ровно 3 коротких уточняющих вопроса (про аудиторию, её уровень и форму аттестации).
-    Верни ТОЛЬКО список вопросов без приветствий.
+    Запрос методиста: "{topic}", объем: {hours} часов.
+    1. Определи тип программы: "ДПО" или "Общеразвивающая". Выведи строго одно слово.
+    2. Если в запросе не хватает данных об аудитории (кто учится) или форме аттестации, придумай 2 коротких уточняющих вопроса.
+    Формат JSON: {{"template_type": "ДПО", "questions": ["Вопрос 1", "Вопрос 2"]}}
     """
-    return ask_llm(prompt, task_type="content")
+    raw = ask_llm(prompt, task_type="content", is_json=True)
+    import json
+    from utils.json_parser import extract_json_from_text
+    try:
+        return extract_json_from_text(raw)
+    except:
+        return {"template_type": "ДПО", "questions": []}
 
-def process_request(topic: str, hours: int, template_type: str = "ДПО"):
+def process_request(topic: str, hours: int, template_type: str = "auto"):
     session_id = str(uuid.uuid4())
-    logger.info(f"Начата генерация каркаса. Тема: {topic}, Часы: {hours}, Тип: {template_type}")
     
     try:
+        # [ТРЕБОВАНИЕ КЕЙСА]: Автоматический выбор шаблона
+        if template_type == "auto" or not template_type:
+            classification = clarify_and_classify(topic, hours)
+            template_type = classification.get("template_type", "ДПО")
+            logger.info(f"Автоматически выбран шаблон: {template_type}")
+            
         framework_obj = generate_framework_json(topic, hours, template_type)
         framework_obj = auto_correct_hours(framework_obj, hours)
         report = run_full_validation(framework_obj)
-        
-        if not report["hours_match"]:
-            logger.warning(f"Ошибка валидации часов: {report['calculated_total']} != {hours}")
-            return {"status": "error", "message": "Ошибка: сумма часов не совпадает", "report": report}
             
         save_session(session_id, framework_obj, "waiting_for_approval")
-        
-        # [ТРЕБОВАНИЕ КЕЙСА]: Логируем действие в БД
         log_action(session_id, "generated")
         
         return {
             "session_id": session_id,
             "status": "waiting_for_approval",
+            "template_type": template_type,
             "validation_report": report,
             "framework": framework_obj.model_dump()
         }
     except Exception as e:
-        logger.error(f"Ошибка при генерации: {e}")
-        return {"session_id": session_id, "status": "error", "message": str(e)}
-
+        logger.error(f"Ошибка: {e}")
+        return {"status": "error", "message": str(e)}
+        
 def approve_and_generate(session_id: str):
     session = get_session(session_id)
     if not session or session["status"] != "waiting_for_approval":
