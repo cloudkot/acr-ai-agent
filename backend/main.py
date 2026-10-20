@@ -2,8 +2,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
-from typing import Literal
+from pydantic import BaseModel
 import os
 from urllib.parse import urlparse
 
@@ -18,7 +17,7 @@ from cloud import LLMServiceError
 
 app = FastAPI(title="ACR AI Agent", version="1.0.0")
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Безопасный CORS (разрешаем только нужные домены)
+# [ТРЕБОВАНИЕ КЕЙСА]: Безопасный CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -31,7 +30,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Безопасность (Security Headers)
+# [ТРЕБОВАНИЕ КЕЙСА]: Security Headers
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
@@ -40,7 +39,7 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-XSS-Protection"] = "1; mode=block"
     return response
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Глобальная обработка ошибок LLM
+# [ТРЕБОВАНИЕ КЕЙСА]: Обработка ошибок LLM
 @app.exception_handler(LLMServiceError)
 async def llm_exception_handler(request: Request, exc: LLMServiceError):
     return JSONResponse(
@@ -48,7 +47,7 @@ async def llm_exception_handler(request: Request, exc: LLMServiceError):
         content={"error": "LLM Error", "detail": exc.message}
     )
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Валидация базового URL моделей при старте (закрываем придирку ревьюера)
+# [ТРЕБОВАНИЕ КЕЙСА]: Валидация базового URL моделей при старте
 @app.on_event("startup")
 def startup_event():
     init_db()
@@ -63,24 +62,29 @@ def startup_event():
 
 @app.get("/health")
 def health_check():
-    """[ТРЕБОВАНИЕ КЕЙСА]: Healthcheck для мониторинга."""
     return {"status": "healthy", "service": "acr-ai-agent", "version": "1.0.0"}
 
 class ClarifyRequest(BaseModel):
     topic: str
+    hours: int = 72 # Дефолт для уточнения
 
 @app.post("/api/clarify")
 def clarify_endpoint(req: ClarifyRequest):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автовыбор шаблона перед генерацией."""
-    return clarify_and_classify(req.topic, 72) # 72 как дефолт для уточнения
+    """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автовыбор шаблона."""
+    return clarify_and_classify(req.topic, req.hours)
 
 # --- ОСНОВНОЙ СЦЕНАРИЙ ---
 
 @app.post("/api/generate")
 def generate_framework_endpoint(req: GenerateRequest):
-    """Шаг 1: Прием запроса и генерация каркаса."""
-    # Если template_type == "auto", оркестратор сам определит тип
-    return process_request(req.topic, req.hours, req.template_type)
+    """Шаг 1: Прием запроса, референсов и генерация каркаса."""
+    # Передаем reference_text в оркестратор
+    return process_request(
+        topic=req.topic, 
+        hours=req.hours, 
+        template_type=req.template_type, 
+        reference_text=req.reference_text
+    )
 
 @app.post("/api/revise/{session_id}")
 def revise_endpoint(session_id: str, req: RevisionRequest):
@@ -94,14 +98,13 @@ def approve_endpoint(session_id: str):
 
 @app.get("/api/report/{session_id}")
 def get_validation_report(session_id: str):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Расширенный отчет автопроверки (каркас + покрытие контентом)."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Расширенный отчет автопроверки."""
     session = get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
     
     base_report = run_full_validation(session["framework"])
     
-    # Если контент уже сгенерирован, проверяем, что все компетенции покрыты тестами
     if session["status"] == "completed" and session["content"]:
         coverage = validate_coverage_with_content(session["framework"], session["content"])
         base_report["deep_coverage"] = coverage
@@ -110,17 +113,25 @@ def get_validation_report(session_id: str):
 
 @app.post("/api/upload-reference")
 async def upload_reference(file: UploadFile = File(...)):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Прием референсов (.docx / .pdf / .txt)."""
+    """
+    [ТРЕБОВАНИЕ КЕЙСА]: Прием референсов (.docx / .pdf / .txt).
+    Возвращает полный текст, чтобы фронтенд передал его в /api/generate.
+    """
     text = await save_and_parse_reference(file)
-    return {"status": "success", "text_preview": text[:200]}
+    return {
+        "status": "success", 
+        "filename": file.filename,
+        "text_preview": text[:200],
+        "full_text": text # <--- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ДЛЯ DEEPSEEK
+    }
 
-# --- ЭКСПОРТ ФАЙЛОВ (Используем GET для браузера) ---
+# --- ЭКСПОРТ ФАЙЛОВ (GET методы) ---
 
 @app.get("/api/export-docx/{session_id}")
 def export_docx_endpoint(session_id: str):
     session = get_session(session_id)
     if not session or session["status"] != "completed":
-        raise HTTPException(status_code=400, detail="Сессия не готова или контент не сгенерирован")
+        raise HTTPException(status_code=400, detail="Сессия не готова")
     filename = f"program_{session_id[:8]}.docx"
     export_to_docx(session["framework"], session["content"], filename)
     return FileResponse(filename, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename=filename)
@@ -139,7 +150,7 @@ def export_lms_endpoint(session_id: str):
     session = get_session(session_id)
     if not session or session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Контент не сгенерирован")
-    filename = f"tests_{session_id[:8]}.txt" # GIFT формат
+    filename = f"tests_{session_id[:8]}.txt"
     export_tests_to_lms(session["content"].get("tests", []), filename)
     return FileResponse(filename, media_type="text/plain", filename=filename)
 
@@ -153,11 +164,11 @@ def export_json_endpoint(session_id: str):
     export_to_json(session["framework"], session["content"], filename)
     return FileResponse(filename, media_type="application/json", filename=filename)
 
-# --- РАЗДАЧА ФРОНТЕНДА (Должно быть в самом конце!) ---
+# --- РАЗДАЧА ФРОНТЕНДА ---
 frontend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
 if os.path.exists(frontend_path):
     app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
 else:
     @app.get("/")
     def no_frontend():
-        return {"message": "Frontend not built yet. Run 'npm run build'."}
+        return {"message": "Frontend not built yet."}

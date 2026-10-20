@@ -32,7 +32,10 @@ class SeminarTask(BaseModel):
 class GenerateRequest(BaseModel):
     topic: str = Field(..., min_length=3, max_length=100)
     hours: int = Field(..., ge=16, le=500, description="Объем программы")
-    template_type: Literal["ДПО", "Общеразвивающая"] = "ДПО"
+    # [ТРЕБОВАНИЕ КЕЙСА]: По умолчанию 'auto', чтобы включить автоклассификатор
+    template_type: Literal["ДПО", "Общеразвивающая", "auto"] = Field(default="auto")
+    # [ТРЕБОВАНИЕ КЕЙСА]: Поле для передачи распарсенного текста референса
+    reference_text: Optional[str] = Field(default=None, max_length=5000)
 
 class RevisionRequest(BaseModel):
     instruction: str = Field(..., min_length=5)
