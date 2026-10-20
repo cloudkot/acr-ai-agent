@@ -195,3 +195,19 @@ async def global_exception_handler(request: Request, exc: Exception):
             "detail": str(exc)
         }
     )
+
+from state_store import get_session, init_db, get_analytics
+
+@app.get("/api/analytics")
+def analytics_endpoint():
+    """[ТРЕБОВАНИЕ КЕЙСА]: Метрики экономической эффективности."""
+    return get_analytics()
+
+@app.get("/api/export-moodle/{session_id}")
+def export_moodle_endpoint(session_id: str):
+    session = get_session(session_id)
+    if not session or session["status"] != "completed":
+        raise HTTPException(status_code=400, detail="Контент не сгенерирован")
+    filename = f"moodle_{session_id[:8]}.xml"
+    export_tests_to_moodle_xml(session["content"].get("tests", []), filename)
+    return FileResponse(filename, media_type="application/xml", filename=filename)

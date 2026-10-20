@@ -169,3 +169,29 @@ def export_to_json(framework: Framework, content: dict, filename: str, constrain
     with open(filename, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
     return filename
+
+def export_tests_to_moodle_xml(tests_data: list, filename: str):
+    """[ТРЕБОВАНИЕ КЕЙСА]: Экспорт в Moodle XML."""
+    import xml.etree.ElementTree as ET
+    
+    quiz = ET.Element("quiz")
+    
+    for i, test in enumerate(tests_data, 1):
+        question = ET.SubElement(quiz, "question", type="multichoice")
+        name = ET.SubElement(question, "name")
+        name_text = ET.SubElement(name, "text")
+        name_text.text = f"Вопрос {i}"
+        
+        q_text = ET.SubElement(question, "questiontext", format="html")
+        q_text_text = ET.SubElement(q_text, "text")
+        q_text_text.text = f"<p>{test.get('question', '')}</p>"
+        
+        for opt in test.get('options', []):
+            answer = ET.SubElement(question, "answer", fraction="100" if opt == test.get('correct_answer') else "0", format="html")
+            ans_text = ET.SubElement(answer, "text")
+            ans_text.text = f"<p>{opt}</p>"
+            
+    tree = ET.ElementTree(quiz)
+    ET.indent(tree, space="  ")
+    tree.write(filename, encoding="utf-8", xml_declaration=True)
+    return filename
