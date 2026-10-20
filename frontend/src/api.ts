@@ -49,7 +49,6 @@ export interface Seminar {
 
 export interface WorkProgram {
   module_title: string;
-  // Бэкенд может присылать разные поля, поэтому делаем опциональными
   description?: string;
   topics?: string[];
   hours?: number;
@@ -71,7 +70,6 @@ export interface ContentData {
       related_competency?: string;
     }>;
   };
-  // ИСПРАВЛЕНО: теперь массив семинаров
   seminars?: Seminar[];
   lectures?: {
     modules_plan?: Array<{
@@ -79,7 +77,6 @@ export interface ContentData {
       theses: string[];
     }>;
   };
-  // НОВЫЕ АРТЕФАКТЫ
   work_programs?: WorkProgram[];
   bibliography?: BibliographyItem[];
 }
@@ -89,6 +86,13 @@ export interface ContentResponse {
   status: string;
   content: ContentData;
   validation_report?: ValidationReport;
+}
+
+export interface Analytics {
+  total_sessions: number;
+  completed_programs: number;
+  estimated_hours_saved: number;
+  estimated_cost_rub: number;
 }
 
 // 0. Загрузка референса
@@ -166,7 +170,14 @@ export async function approveFramework(sessionId: string): Promise<ContentRespon
   return res.json();
 }
 
-// 4. Скачивание файлов (GET)
-export function downloadFile(sessionId: string, type: 'docx' | 'pptx' | 'lms' | 'json') {
+// 4. Скачивание файлов (ИСПРАВЛЕНО: добавлен moodle)
+export function downloadFile(sessionId: string, type: 'docx' | 'pptx' | 'lms' | 'json' | 'moodle') {
   window.location.href = `${BASE_URL}/export-${type}/${sessionId}`;
+}
+
+// 5. Аналитика (НОВОЕ)
+export async function getAnalytics(): Promise<Analytics> {
+  const res = await fetch(`${BASE_URL}/analytics`);
+  if (!res.ok) throw new Error('Ошибка загрузки аналитики');
+  return res.json();
 }

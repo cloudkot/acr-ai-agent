@@ -4,7 +4,8 @@ import {
   Loader2, ArrowRight, CheckCircle2, Download, 
   FileText, BookOpen, GraduationCap, RotateCcw, 
   Sparkles, FileDown, Presentation, Moon, Sun,
-  Minus, Plus, AlertCircle, Paperclip, X, Library
+  Minus, Plus, AlertCircle, Paperclip, X, Library,
+  TrendingUp, Clock, Coins
 } from 'lucide-react';
 import { 
   generateFramework, 
@@ -12,8 +13,10 @@ import {
   reviseFramework,
   uploadReference,
   downloadFile,
+  getAnalytics,
   type Framework,
-  type ContentResponse 
+  type ContentResponse,
+  type Analytics
 } from './api';
 
 // --- Error Boundary ---
@@ -70,6 +73,9 @@ function MainApp() {
   const [referenceText, setReferenceText] = useState<string>('');
   const [uploadingFile, setUploadingFile] = useState(false);
 
+  // Аналитика
+  const [analytics, setAnalytics] = useState<Analytics | null>(null);
+
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem('theme');
     if (saved) return saved === 'dark';
@@ -85,6 +91,13 @@ function MainApp() {
       localStorage.setItem('theme', 'light');
     }
   }, [darkMode]);
+
+  // Загрузка аналитики при старте
+  useEffect(() => {
+    getAnalytics()
+      .then(setAnalytics)
+      .catch(() => setAnalytics(null)); // Молча игнорируем, если эндпоинта нет
+  }, []);
 
   const handleHoursChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -183,7 +196,7 @@ function MainApp() {
     }
   };
 
-  const handleDownload = (type: 'docx' | 'pptx' | 'lms' | 'json') => {
+  const handleDownload = (type: 'docx' | 'pptx' | 'lms' | 'moodle' | 'json') => {
     downloadFile(sessionId, type);
   };
 
@@ -272,7 +285,26 @@ function MainApp() {
               </p>
             </div>
 
+            {/* ВИДЖЕТ АНАЛИТИКИ */}
+            {analytics && (
+              <div className="max-w-2xl mx-auto mb-6 flex gap-2 sm:gap-4 p-4 bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl border border-blue-100 dark:border-blue-900/50 shadow-lg shadow-blue-500/5 animate-fade-in-up">
+                <div className="flex-1 text-center border-r border-gray-100 dark:border-gray-700">
+                  <div className="text-xl sm:text-2xl font-extrabold text-blue-600 dark:text-blue-400">{analytics.completed_programs}</div>
+                  <div className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wide mt-1 flex items-center justify-center gap-1"><TrendingUp className="w-3 h-3"/> Программ</div>
+                </div>
+                <div className="flex-1 text-center border-r border-gray-100 dark:border-gray-700">
+                  <div className="text-xl sm:text-2xl font-extrabold text-green-600 dark:text-green-400">{analytics.estimated_hours_saved} ч.</div>
+                  <div className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wide mt-1 flex items-center justify-center gap-1"><Clock className="w-3 h-3"/> Сэкономлено</div>
+                </div>
+                <div className="flex-1 text-center">
+                  <div className="text-xl sm:text-2xl font-extrabold text-purple-600 dark:text-purple-400">{analytics.estimated_cost_rub} ₽</div>
+                  <div className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wide mt-1 flex items-center justify-center gap-1"><Coins className="w-3 h-3"/> Потрачено</div>
+                </div>
+              </div>
+            )}
+
             <div className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-3xl shadow-2xl shadow-blue-500/5 border border-white dark:border-gray-700 p-8 max-w-2xl mx-auto">
+              
               <div className="space-y-6">
                 <div>
                   <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Тема программы</label>
@@ -540,7 +572,7 @@ function MainApp() {
               </div>
             )}
 
-            {/* Семинары (теперь массив) */}
+            {/* Семинары (массив) */}
             {content.content?.seminars && content.content.seminars.length > 0 && (
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
                 <div className="flex items-center justify-between mb-6">
@@ -567,7 +599,7 @@ function MainApp() {
               </div>
             )}
 
-            {/* Рабочие программы (НОВОЕ) */}
+            {/* Рабочие программы */}
             {content.content?.work_programs && content.content.work_programs.length > 0 && (
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
                 <div className="flex items-center gap-2 text-sm font-bold text-teal-600 dark:text-teal-400 uppercase tracking-widest mb-4">
@@ -589,7 +621,7 @@ function MainApp() {
               </div>
             )}
 
-            {/* Библиография (НОВОЕ) */}
+            {/* Библиография */}
             {content.content?.bibliography && content.content.bibliography.length > 0 && (
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
                 <div className="flex items-center gap-2 text-sm font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-4">
@@ -630,9 +662,10 @@ function MainApp() {
               </div>
             )}
 
+            {/* Экспорт (4 кнопки) */}
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
               <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><Download className="w-5 h-5"/> Экспорт материалов</h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <button onClick={() => handleDownload('docx')} className="flex items-center justify-center gap-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 py-3 rounded-xl font-bold hover:bg-gray-100 dark:hover:bg-gray-700 hover:border-gray-300 transition-all">
                   <FileDown className="w-5 h-5 text-blue-600" /> Word
                 </button>
@@ -641,6 +674,9 @@ function MainApp() {
                 </button>
                 <button onClick={() => handleDownload('lms')} className="flex items-center justify-center gap-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 py-3 rounded-xl font-bold hover:bg-gray-100 dark:hover:bg-gray-700 hover:border-gray-300 transition-all">
                   <Download className="w-5 h-5 text-purple-600" /> LMS (GIFT)
+                </button>
+                <button onClick={() => handleDownload('moodle')} className="flex items-center justify-center gap-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 py-3 rounded-xl font-bold hover:bg-gray-100 dark:hover:bg-gray-700 hover:border-gray-300 transition-all">
+                  <FileDown className="w-5 h-5 text-red-600" /> Moodle XML
                 </button>
               </div>
             </div>
