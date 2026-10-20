@@ -182,3 +182,16 @@ else:
     @app.get("/")
     def no_frontend():
         return {"message": "Frontend not built yet."}
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Критическая ошибка: {str(exc)}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error", 
+            "error_code": "INTERNAL_SERVER_ERROR",
+            "message": "Произошла внутренняя ошибка сервера. Попробуйте позже.",
+            "detail": str(exc)
+        }
+    )
