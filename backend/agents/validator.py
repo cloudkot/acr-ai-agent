@@ -98,38 +98,28 @@ def run_full_validation(framework: Framework) -> dict:
     }
 
 def check_content_constraints(framework: Framework, content: dict, constraints: str = None) -> dict:
-    """
-    [ТРЕБОВАНИЕ КЕЙСА / ФИКС РЕВЬЮЕРА]: Программная постпроверка ограничений.
-    Проверяет, что LLM реально выполнила то, что просил методист в строке constraints.
-    """
-    if not constraints:
-        return {"constraints_ok": True, "errors": []}
-        
+    """[ФИКС РЕВЬЮЕРА]: Пост-валидация ограничений с учетом текстовых чисел."""
+    if not constraints: return {"constraints_ok": True, "errors": []}
     errors = []
     
-    # 1. Проверка количества вопросов (например, "10 вопросов")
-    q_match = re.search(r'(\d+)\s*(вопрос|тест)', constraints.lower())
-    if q_match:
-        expected_q = int(q_match.group(1))
+    # Проверка количества вопросов (и цифры, и слова)
+    expected_q = None
+    digits = re.findall(r'\b(\d+)\b', constraints)
+    if digits: expected_q = int(digits[0])
+    elif "десять" in constraints.lower(): expected_q = 10
+    elif "пять" in constraints.lower(): expected_q = 5
+    
+    if expected_q:
         actual_q = len(content.get("tests", []))
         if actual_q != expected_q:
-            errors.append(f"Нарушено ограничение по тестам: ожидалось {expected_q}, сгенерировано {actual_q}.")
-            
-    # 2. Проверка слайдов для конкретного модуля (например, "слайды для модуля pandas")
-    if "слайд" in constraints.lower() and ("модул" in constraints.lower() or "занят" in constraints.lower()):
-        # Ищем название модуля в строке ограничений
-        for mod in framework.modules:
-            # Берем первое слово модуля (например, "pandas" или "Введение")
-            mod_keyword = mod.title.split()[0].lower()
-            if mod_keyword in constraints.lower():
-                # Проверяем, есть ли слайды для других модулей
-                for slide in content.get("slides", []):
-                    slide_mod = slide.get("module_title", "").lower()
-                    if mod_keyword not in slide_mod and slide_mod:
-                        errors.append(f"Нарушено ограничение по слайдам: сгенерированы слайды для '{slide_mod}', а просили только для '{mod.title}'.")
-                        break
+            errors.append(f"Ожидалось {expected_q} вопросов, сгенерировано {actual_q}.")
 
-    return {
-        "constraints_ok": len(errors) == 0,
-        "errors": errors
-    }
+    # Проверка слайдов ("первые два занятия")
+    if "первые два" in constraints.lower() or "первых двух" in constraints.lower():
+        allowed_modules = [m.title for m in framework.modules[:2]]
+        for slide in content.get("slides", []):
+            if slide.get("module_title") not in allowed_modules:
+                errors.append(f"Слайд для '{slide.get('module_title')}' лишний, просили только первые два занятия.")
+                break
+
+    return {"constraints_ok": len(errors) == 0, "errors": errors}
