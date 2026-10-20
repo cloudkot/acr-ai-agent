@@ -4,12 +4,13 @@ import {
   Loader2, ArrowRight, CheckCircle2, Download, 
   FileText, BookOpen, GraduationCap, RotateCcw, 
   Sparkles, FileDown, Presentation, Moon, Sun,
-  Minus, Plus, AlertCircle
+  Minus, Plus, AlertCircle, Paperclip, X
 } from 'lucide-react';
 import { 
   generateFramework, 
   approveFramework, 
   reviseFramework,
+  uploadReference,
   downloadFile,
   type Framework,
   type ContentResponse 
@@ -65,6 +66,11 @@ function MainApp() {
   const [reviseText, setReviseText] = useState('');
   const [revising, setRevising] = useState(false);
 
+  // Референсы
+  const [referenceFile, setReferenceFile] = useState<File | null>(null);
+  const [referenceText, setReferenceText] = useState<string>('');
+  const [uploadingFile, setUploadingFile] = useState(false);
+
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem('theme');
     if (saved) return saved === 'dark';
@@ -99,6 +105,29 @@ function MainApp() {
     setHoursInput(val.toString());
   };
 
+  // Загрузка файла-референса
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setReferenceFile(file);
+    setUploadingFile(true);
+    setError(null);
+    try {
+      const res = await uploadReference(file);
+      setReferenceText(res.full_text);
+    } catch (err: any) {
+      setError(err.message || 'Не удалось загрузить файл. Возможно, бэкенд не поддерживает загрузку.');
+      setReferenceFile(null);
+    } finally {
+      setUploadingFile(false);
+    }
+  };
+
+  const handleRemoveReference = () => {
+    setReferenceFile(null);
+    setReferenceText('');
+  };
+
   const handleGenerate = async () => {
     if (!topic.trim() || topic.trim().length < 3) { setError('Тема слишком короткая (минимум 3 символа)'); return; }
     
@@ -111,13 +140,13 @@ function MainApp() {
     setError(null);
     setLoading(true);
     try {
-      const res = await generateFramework(topic.trim(), finalHours);
+      // Передаем 'auto' и текст референса
+      const res = await generateFramework(topic.trim(), finalHours, 'auto', referenceText || undefined);
       setSessionId(res.session_id);
       setFramework(res.framework);
       
       if (res.validation_report) {
-        // Безопасно сохраняем отчет без as any
-        setContent(prev => ({ ...prev, validation_report: res.validation_report } as ContentResponse));
+        setContent({ validation_report: res.validation_report } as ContentResponse);
       }
       
       setScreen('framework');
@@ -148,7 +177,6 @@ function MainApp() {
     setError(null);
     try {
       const res = await approveFramework(sessionId);
-      // Убрали console.log
       setContent(res);
       setScreen('result');
     } catch (e: any) {
@@ -158,12 +186,8 @@ function MainApp() {
     }
   };
 
-  const handleDownload = async (type: 'docx' | 'pptx' | 'lms') => {
-    try {
-      await downloadFile(sessionId, type);
-    } catch (e: any) {
-      setError(e.message || 'Не удалось скачать файл');
-    }
+  const handleDownload = (type: 'docx' | 'pptx' | 'lms' | 'json') => {
+    downloadFile(sessionId, type);
   };
 
   const handleRestart = () => {
@@ -175,6 +199,8 @@ function MainApp() {
     setFramework(null);
     setContent(null);
     setReviseText('');
+    setReferenceFile(null);
+    setReferenceText('');
     setError(null);
   };
 
@@ -274,6 +300,27 @@ function MainApp() {
                     ))}
                   </div>
                 </div>
+
+                {/* Загрузка референсов */}
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Референсы (опционально)</label>
+                  {!referenceFile ? (
+                    <label className="flex items-center justify-center gap-2 w-full px-5 py-4 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 dark:hover:bg-blue-900/10 transition-all">
+                      {uploadingFile ? <Loader2 className="w-5 h-5 animate-spin text-blue-500" /> : <Paperclip className="w-5 h-5 text-gray-400" />}
+                      <span className="text-sm font-medium text-gray-500">{uploadingFile ? 'Загрузка...' : 'Прикрепить .docx или .pdf'}</span>
+                      <input type="file" accept=".docx,.pdf,.txt" className="hidden" onChange={handleFileUpload} disabled={uploadingFile || loading} />
+                    </label>
+                  ) : (
+                    <div className="flex items-center justify-between w-full px-5 py-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl">
+                      <div className="flex items-center gap-2 text-sm font-medium text-green-700 dark:text-green-300">
+                        <CheckCircle2 className="w-5 h-5" /> {referenceFile.name}
+                      </div>
+                      <button onClick={handleRemoveReference} className="p-1 text-green-600 hover:text-red-500 transition-colors">
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
                 
                 <div>
                   <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Объём программы (часы)</label>
@@ -316,7 +363,7 @@ function MainApp() {
                 
                 <button
                   onClick={handleGenerate}
-                  disabled={loading}
+                  disabled={loading || uploadingFile}
                   className="w-full relative group bg-gray-900 dark:bg-white text-white dark:text-gray-900 py-4 rounded-xl font-bold text-lg hover:shadow-xl hover:shadow-gray-900/20 dark:hover:shadow-white/20 disabled:opacity-50 flex items-center justify-center gap-3 transition-all duration-300 overflow-hidden"
                 >
                   {loading ? (
@@ -336,17 +383,47 @@ function MainApp() {
 
         {screen === 'framework' && framework && (
           <div className="space-y-6 animate-fade-in-up">
-            {content?.validation_report?.hours_match !== undefined && (
-              <div className={`p-4 rounded-xl border-l-4 shadow-sm ${
+            {/* Детальный отчёт автопроверки */}
+            {content?.validation_report && (
+              <div className={`p-5 rounded-xl border-l-4 shadow-sm ${
                 content.validation_report.hours_match 
                   ? 'bg-green-50 border-green-500 text-green-800 dark:bg-green-900/20 dark:text-green-300' 
                   : 'bg-red-50 border-red-500 text-red-800 dark:bg-red-900/20 dark:text-red-300'
               }`}>
-                <h3 className="font-bold flex items-center gap-2">
+                <h3 className="font-bold flex items-center gap-2 text-lg mb-3">
                   {content.validation_report.hours_match ? <CheckCircle2 className="w-5 h-5"/> : <AlertCircle className="w-5 h-5"/>}
-                  {content.validation_report.hours_match ? 'Отчёт автопроверки: Всё совпадает' : 'Внимание: есть расхождения'}
+                  Отчёт автопроверки
                 </h3>
-                <p className="text-sm mt-1">Сумма часов: <strong>{content.validation_report.calculated_total}</strong> / {content.validation_report.expected_total}</p>
+                
+                <div className="space-y-2 text-sm">
+                  <p>Часы: <strong>{content.validation_report.calculated_total}</strong> / {content.validation_report.expected_total} 
+                    <span className="ml-2">({content.validation_report.hours_match ? 'Совпадает' : 'Ошибка'})</span>
+                  </p>
+
+                  {content.validation_report.deep_coverage && (
+                    <div>
+                      <p className={content.validation_report.deep_coverage.coverage_ok ? "text-green-700 dark:text-green-400" : "text-orange-600 dark:text-orange-400"}>
+                        Покрытие компетенций: <strong>{content.validation_report.deep_coverage.tested_count}</strong> из {content.validation_report.deep_coverage.total_competencies}
+                      </p>
+                      {!content.validation_report.deep_coverage.coverage_ok && content.validation_report.deep_coverage.uncovered.length > 0 && (
+                        <ul className="mt-1 list-disc pl-5 text-red-500">
+                          {content.validation_report.deep_coverage.uncovered.map((comp, i) => (
+                            <li key={i}>Не проверено: {comp}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+
+                  {content.validation_report.sources_check?.warnings && content.validation_report.sources_check.warnings.length > 0 && (
+                    <div className="mt-2 text-orange-600 dark:text-orange-400">
+                      <strong className="block">Внимание по источникам:</strong>
+                      <ul className="list-disc pl-5">
+                        {content.validation_report.sources_check.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 

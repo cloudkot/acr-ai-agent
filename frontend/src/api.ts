@@ -24,8 +24,16 @@ export interface ValidationReport {
   hours_match: boolean;
   calculated_total: number;
   expected_total: number;
-  competency_coverage: boolean;
-  total_competencies: number;
+  // Дополнительные поля от Даниила (deep validation)
+  deep_coverage?: {
+    coverage_ok: boolean;
+    tested_count: number;
+    total_competencies: number;
+    uncovered: string[];
+  };
+  sources_check?: {
+    warnings: string[];
+  };
 }
 
 export interface GenerateResponse {
@@ -63,12 +71,34 @@ export interface ContentResponse {
   validation_report?: ValidationReport;
 }
 
-// 1. Генерация каркаса
-export async function generateFramework(topic: string, hours: number): Promise<GenerateResponse> {
+// 0. Загрузка референса (если бэкенд поддерживает)
+export async function uploadReference(file: File): Promise<{ full_text: string; filename: string }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch(`${BASE_URL}/upload`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) throw new Error('Ошибка загрузки референса');
+  return res.json();
+}
+
+// 1. Генерация каркаса (с поддержкой референсов и авто-шаблона)
+export async function generateFramework(
+  topic: string, 
+  hours: number, 
+  templateType: string = 'auto', 
+  referenceText?: string
+): Promise<GenerateResponse> {
   const res = await fetch(`${BASE_URL}/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ topic, hours }),
+    body: JSON.stringify({ 
+      topic, 
+      hours, 
+      template_type: templateType, 
+      reference_text: referenceText || undefined 
+    }),
   });
   
   if (!res.ok) {
@@ -116,24 +146,8 @@ export async function approveFramework(sessionId: string): Promise<ContentRespon
   return res.json();
 }
 
-// 4. Скачивание файлов
-export async function downloadFile(sessionId: string, type: 'docx' | 'pptx' | 'lms') {
-  const res = await fetch(`${BASE_URL}/export-${type}/${sessionId}`, { method: 'POST' });
-  if (!res.ok) throw new Error('Ошибка экспорта файла');
-  
-  const blob = await res.blob();
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  
-  // GIFT (LMS) должен быть .txt
-  let ext = type as string;
-  if (type === 'lms') {
-    ext = 'txt'; 
-  }
-
-  a.download = `result_${sessionId.slice(0, 8)}.${ext}`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+// 4. Скачивание файлов (ИСПРАВЛЕНО: теперь GET, а не POST)
+export function downloadFile(sessionId: string, type: 'docx' | 'pptx' | 'lms' | 'json') {
+  // Прямое перенаправление браузера на GET-эндпоинт
+  window.location.href = `${BASE_URL}/export-${type}/${sessionId}`;
 }
