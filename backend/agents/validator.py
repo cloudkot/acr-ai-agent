@@ -146,3 +146,45 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
         ]
 
     return content
+
+
+# --- НОВАЯ ФУНКЦИЯ, КОТОРУЮ ЖДАЛ ORCHESTRATOR ---
+def check_content_constraints(framework: Framework, content: dict, constraints: str = None) -> dict:
+    """
+    [ФИКС РЕВЬЮЕРА]: Проверка того, что контент соответствует ограничениям.
+    Возвращает отчет для оркестратора.
+    """
+    if not constraints:
+        return {"constraints_ok": True, "errors": []}
+
+    errors = []
+    cons_lower = constraints.lower()
+
+    # 1. Проверка количества вопросов
+    expected_q = None
+    digits = re.findall(r'\b(\d+)\b', constraints)
+    if digits: expected_q = int(digits[0])
+    elif "десять" in cons_lower: expected_q = 10
+
+    if expected_q and isinstance(content.get("tests"), list):
+        actual_q = len(content["tests"])
+        if actual_q != expected_q:
+            errors.append(f"Ожидалось {expected_q} вопросов, сгенерировано {actual_q}")
+
+    # 2. Проверка модулей для слайдов
+    if ("первые два" in cons_lower or "первых двух" in cons_lower) and isinstance(content.get("slides"), list):
+        allowed_modules = [m.title.lower() for m in framework.modules[:2]]
+        for slide in content["slides"]:
+            if not any(allowed in slide.get("module_title", "").lower() for allowed in allowed_modules):
+                errors.append(f"Слайд для модуля '{slide.get('module_title')}' не входит в первые два занятия")
+
+    # 3. Проверка "без лекций"
+    if "без лекций" in cons_lower or "без аудиторных" in cons_lower:
+        for mod in framework.modules:
+            if mod.lectures > 0 or mod.practice > 0:
+                errors.append(f"Модуль '{mod.title}' содержит лекции или практику, хотя должно быть только СРС")
+    
+    return {
+        "constraints_ok": len(errors) == 0,
+        "errors": errors
+    }
