@@ -116,7 +116,8 @@ function MainApp() {
       setFramework(res.framework);
       
       if (res.validation_report) {
-        setContent({ validation_report: res.validation_report } as any);
+        // Безопасно сохраняем отчет без as any
+        setContent(prev => ({ ...prev, validation_report: res.validation_report } as ContentResponse));
       }
       
       setScreen('framework');
@@ -147,7 +148,7 @@ function MainApp() {
     setError(null);
     try {
       const res = await approveFramework(sessionId);
-      console.log("Ответ от /approve:", res);
+      // Убрали console.log
       setContent(res);
       setScreen('result');
     } catch (e: any) {
@@ -180,11 +181,9 @@ function MainApp() {
   return (
     <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#0F172A] text-gray-900 dark:text-gray-100 transition-colors duration-300 relative overflow-hidden">
       
-      {/* Декоративные градиентные пятна */}
       <div className="absolute top-0 left-1/4 w-96 h-96 bg-blue-400/20 rounded-full blur-3xl -z-10 pointer-events-none"></div>
       <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-purple-400/20 rounded-full blur-3xl -z-10 pointer-events-none"></div>
 
-      {/* Шапка */}
       <header className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 sticky top-0 z-50 transition-colors">
         <div className="max-w-5xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -215,7 +214,6 @@ function MainApp() {
             </div>
           </div>
 
-          {/* Прогресс-бар */}
           <div className="flex items-center mt-6 text-xs font-medium">
             <Step num={1} label="Параметры" active={screen === 'input'} done={screen !== 'input'} />
             <div className={`flex-1 h-1 mx-3 rounded-full transition-all duration-500 ${screen !== 'input' ? 'bg-gradient-to-r from-green-400 to-green-500' : 'bg-gray-200 dark:bg-gray-700'}`} />
@@ -226,7 +224,6 @@ function MainApp() {
         </div>
       </header>
 
-      {/* Ошибка */}
       {error && (
         <div className="max-w-5xl mx-auto mt-6 px-6 animate-fade-in-up">
           <div className="bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500 text-red-700 dark:text-red-300 px-4 py-3 rounded-r-lg text-sm flex items-start justify-between gap-3 shadow-sm">
@@ -241,7 +238,6 @@ function MainApp() {
 
       <main className="max-w-4xl mx-auto px-6 py-12 relative z-10">
         
-        {/* ЭКРАН 1: Ввод */}
         {screen === 'input' && (
           <div className="animate-fade-in-up">
             <div className="text-center mb-10">
@@ -338,7 +334,6 @@ function MainApp() {
           </div>
         )}
 
-        {/* ЭКРАН 2: Каркас */}
         {screen === 'framework' && framework && (
           <div className="space-y-6 animate-fade-in-up">
             {content?.validation_report?.hours_match !== undefined && (
@@ -428,7 +423,6 @@ function MainApp() {
           </div>
         )}
 
-        {/* ЭКРАН 3: Результат */}
         {screen === 'result' && content && (
           <div className="space-y-6 animate-fade-in-up">
             <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-3xl p-8 text-white shadow-2xl shadow-green-500/20 relative overflow-hidden">
