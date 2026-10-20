@@ -91,4 +91,4 @@ async def save_and_parse_reference(file: UploadFile) -> str:
     
     # [ТРЕБОВАНИЕ КЕЙСА]: Ограничиваем размер контекста для LLM (первые 3000 символов)
     # Этого достаточно для понимания сути, но не переполнит контекстное окно.
-    return extracted_text[:3000].strip()
+    return extracted_text[:10000].strip()
