@@ -105,7 +105,6 @@ function MainApp() {
     setHoursInput(val.toString());
   };
 
-  // Загрузка файла-референса
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -383,7 +382,6 @@ function MainApp() {
 
         {screen === 'framework' && framework && (
           <div className="space-y-6 animate-fade-in-up">
-            {/* Детальный отчёт автопроверки */}
             {content?.validation_report && (
               <div className={`p-5 rounded-xl border-l-4 shadow-sm ${
                 content.validation_report.hours_match 

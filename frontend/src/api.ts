@@ -24,7 +24,6 @@ export interface ValidationReport {
   hours_match: boolean;
   calculated_total: number;
   expected_total: number;
-  // Дополнительные поля от Даниила (deep validation)
   deep_coverage?: {
     coverage_ok: boolean;
     tested_count: number;
@@ -71,7 +70,7 @@ export interface ContentResponse {
   validation_report?: ValidationReport;
 }
 
-// 0. Загрузка референса (если бэкенд поддерживает)
+// 0. Загрузка референса
 export async function uploadReference(file: File): Promise<{ full_text: string; filename: string }> {
   const formData = new FormData();
   formData.append('file', file);
@@ -83,7 +82,7 @@ export async function uploadReference(file: File): Promise<{ full_text: string; 
   return res.json();
 }
 
-// 1. Генерация каркаса (с поддержкой референсов и авто-шаблона)
+// 1. Генерация каркаса (ИСПРАВЛЕНО: добавлены template_type и reference_text)
 export async function generateFramework(
   topic: string, 
   hours: number, 
@@ -146,8 +145,7 @@ export async function approveFramework(sessionId: string): Promise<ContentRespon
   return res.json();
 }
 
-// 4. Скачивание файлов (ИСПРАВЛЕНО: теперь GET, а не POST)
+// 4. Скачивание файлов (ИСПРАВЛЕНО: теперь GET через window.location.href)
 export function downloadFile(sessionId: string, type: 'docx' | 'pptx' | 'lms' | 'json') {
-  // Прямое перенаправление браузера на GET-эндпоинт
   window.location.href = `${BASE_URL}/export-${type}/${sessionId}`;
 }
