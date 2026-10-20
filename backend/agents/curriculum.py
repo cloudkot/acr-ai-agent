@@ -4,6 +4,8 @@ from schemas import Framework
 from utils.json_parser import extract_json_from_text
 from services.rag_service import search_knowledge_base
 from logger import logger
+import difflib
+
 
 def generate_framework_json(
     topic: str, 
@@ -116,3 +118,21 @@ def revise_framework_json(current_framework: Framework, instruction: str) -> Fra
         comp.name = comp.name.replace("[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]", "").strip()
         
     return framework_obj
+
+def check_plagiarism(generated_text: str, reference_text: str) -> float:
+    """
+    [ТРЕБОВАНИЕ КЕЙСА]: Защита от дословного копирования.
+    Возвращает процент схожести (0.0 - 1.0).
+    """
+    if not reference_text:
+        return 0.0
+    matcher = difflib.SequenceMatcher(None, reference_text.lower(), generated_text.lower())
+    return matcher.ratio()
+
+# Внутри функции generate_framework_json, после получения framework_obj:
+    if reference_text:
+        similarity = check_plagiarism(framework_obj.goal, reference_text)
+        if similarity > 0.8:
+            logger.warning(f"Обнаружено сильное копирование из референса! Схожесть: {similarity*100:.1f}%")
+            # Если скопировано слишком много, добавляем пометку
+            framework_obj.goal = f"[ВНИМАНИЕ: Высокая схожесть с референсом] {framework_obj.goal}"
