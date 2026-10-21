@@ -1,8 +1,9 @@
 import os
 
 class Config:
-    # [ФИКС РЕВЬЮЕРА]: Вынесли жестко заданные параметры в конфигурацию
-    MAX_CONCURRENT_REQUESTS = int(os.getenv("LLM_MAX_CONCURRENT", 5))
+    # [ФИКС РЕВЬЮЕРА]: Подняли лимит до 6, но оставили его настраиваемым через .env
+    # Если ВМ снова начнет падать по памяти (OOM), просто уменьшите это значение до 4 или 3.
+    MAX_CONCURRENT_REQUESTS = int(os.getenv("LLM_MAX_CONCURRENT", 6))
     
     # Формула расчета вопросов (по умолчанию: 1 вопрос на каждые 15 часов, но не менее 10)
     QUESTIONS_PER_HOURS = int(os.getenv("QUESTIONS_PER_HOURS", 15))

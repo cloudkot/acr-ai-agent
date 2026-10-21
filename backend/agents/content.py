@@ -69,11 +69,10 @@ def _rule_based_fallback_bibliography(framework: Framework) -> list:
     return [f"Практическое руководство по {topics}. 2024.", f"Сборник лучших практик. 2023.", f"Архитектура и паттерны проектирования. 2025."]
 
 # ==========================================
-# [ИЗОЛИРОВАННЫЕ ГЕНЕРАТОРЫ]: Каждый возвращает (данные, токены, стоимость)
+# [ИЗОЛИРОВАННЫЕ ГЕНЕРАТОРЫ]
 # ==========================================
 
 async def generate_tests(framework: Framework, constraints: str = None) -> tuple[list, int, float]:
-    """Генерирует тестовые вопросы (с батчингом по 5 штук)."""
     compact_data = {"total_hours": framework.total_hours, "competencies": [c.name for c in framework.competencies]}
     base_json = json.dumps(compact_data, ensure_ascii=False, separators=(',', ':'))
     constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""
@@ -121,7 +120,6 @@ async def generate_tests(framework: Framework, constraints: str = None) -> tuple
         if isinstance(data, list):
             all_tests.extend([x for x in data if isinstance(x, dict) and x.get("question") and x.get("question") != "None"])
 
-    # Сборка с fallback
     final_tests = all_tests[:target_q]
     while len(final_tests) < target_q:
         mod_title = framework.modules[len(final_tests) % len(framework.modules)].title if framework.modules else "программе"
@@ -130,7 +128,6 @@ async def generate_tests(framework: Framework, constraints: str = None) -> tuple
     return final_tests, total_tokens, total_cost
 
 async def generate_lectures(framework: Framework, constraints: str = None) -> tuple[list, int, float]:
-    """Генерирует планы лекций (по одному на модуль)."""
     compact_data = {"competencies": [c.name for c in framework.competencies]}
     base_json = json.dumps(compact_data, ensure_ascii=False, separators=(',', ':'))
     constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""
@@ -169,7 +166,6 @@ async def generate_lectures(framework: Framework, constraints: str = None) -> tu
     return final_lectures, total_tokens, total_cost
 
 async def generate_seminars(framework: Framework, constraints: str = None) -> tuple[list, int, float]:
-    """Генерирует задания для семинаров (по одному на модуль)."""
     compact_data = {"competencies": [c.name for c in framework.competencies]}
     base_json = json.dumps(compact_data, ensure_ascii=False, separators=(',', ':'))
     constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""
@@ -208,7 +204,6 @@ async def generate_seminars(framework: Framework, constraints: str = None) -> tu
     return final_seminars, total_tokens, total_cost
 
 async def generate_slides(framework: Framework, constraints: str = None) -> tuple[list, int, float]:
-    """Генерирует структуру слайдов (с учетом ограничений)."""
     compact_data = {"competencies": [c.name for c in framework.competencies]}
     base_json = json.dumps(compact_data, ensure_ascii=False, separators=(',', ':'))
     constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""
@@ -228,7 +223,6 @@ async def generate_slides(framework: Framework, constraints: str = None) -> tupl
             return [], t, c
         except Exception: return [], 0, 0.0
 
-    # Ограничения на модули для слайдов
     target_modules = framework.modules
     if constraints:
         cons_lower = constraints.lower()
@@ -252,7 +246,6 @@ async def generate_slides(framework: Framework, constraints: str = None) -> tupl
     return all_slides, total_tokens, total_cost
 
 async def generate_work_programs(framework: Framework, constraints: str = None) -> tuple[list, int, float]:
-    """Генерирует рабочие программы (по одной на модуль)."""
     compact_data = {"competencies": [c.name for c in framework.competencies]}
     base_json = json.dumps(compact_data, ensure_ascii=False, separators=(',', ':'))
     constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""
@@ -287,7 +280,6 @@ async def generate_work_programs(framework: Framework, constraints: str = None) 
     return final_wp, total_tokens, total_cost
 
 async def generate_bibliography(framework: Framework, constraints: str = None) -> tuple[list, int, float]:
-    """Генерирует список литературы."""
     compact_data = {"goal": framework.goal[:100]}
     base_json = json.dumps(compact_data, ensure_ascii=False, separators=(',', ':'))
     constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""

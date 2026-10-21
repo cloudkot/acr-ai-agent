@@ -99,7 +99,6 @@ async def global_exception_handler(request: Request, exc: Exception):
 # [ТРЕБОВАНИЕ КЕЙСА]: Инициализация БД и валидация URL при старте
 @app.on_event("startup")
 async def startup_event():
-    # [ФИКС АРХИТЕКТУРЫ]: init_db теперь асинхронная
     await init_db()
     base_url = os.getenv("OPENAI_BASE_URL", "")
     if base_url:

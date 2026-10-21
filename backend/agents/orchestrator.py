@@ -22,10 +22,8 @@ from logger import logger
 # ==========================================
 
 class CurriculumSkill(BaseAgent):
-    """Навык для генерации каркаса программы."""
     def __init__(self):
         super().__init__("Curriculum Architect", "Генерирует каркас программы.")
-        
     async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         fw, tokens, cost = await generate_framework_json(
             context["topic"], context["hours"], context["template_type"], 
@@ -107,36 +105,40 @@ class RevisionSkill(BaseAgent):
         return context
 
 # ==========================================
-# [АРХИТЕКТУРА]: Динамический Оркестратор
+# [ФИКС РЕВЬЮЕРА]: Динамический Оркестратор
 # ==========================================
 
 class AgentOrchestrator:
     """
-    Центральный диспетчер с реестром навыков.
-    Пайплайны собираются динамически из списка шагов.
+    Центральный диспетчер с динамическим реестром навыков.
+    Позволяет добавлять новые навыки без изменения кода оркестратора.
     """
     def __init__(self):
-        self.skills: Dict[str, BaseAgent] = {
-            "curriculum": CurriculumSkill(),
-            "tests": TestsSkill(),
-            "lectures": LecturesSkill(),
-            "seminars": SeminarsSkill(),
-            "slides": SlidesSkill(),
-            "work_programs": WorkProgramsSkill(),
-            "bibliography": BibliographySkill(),
-            "revision": RevisionSkill(),
-            "validation": ValidationSkill()
-        }
+        self.skills: Dict[str, BaseAgent] = {}
+        
+        # [ФИКС]: Динамическая регистрация базовых навыков
+        self.register_skill("curriculum", CurriculumSkill())
+        self.register_skill("tests", TestsSkill())
+        self.register_skill("lectures", LecturesSkill())
+        self.register_skill("seminars", SeminarsSkill())
+        self.register_skill("slides", SlidesSkill())
+        self.register_skill("work_programs", WorkProgramsSkill())
+        self.register_skill("bibliography", BibliographySkill())
+        self.register_skill("revision", RevisionSkill())
+        self.register_skill("validation", ValidationSkill())
+
+    def register_skill(self, name: str, skill: BaseAgent):
+        """[ФИКС РЕВЬЮЕРА]: Метод для динамического добавления нового навыка."""
+        logger.info(f"Регистрация навыка: {name} ({skill.name})")
+        self.skills[name] = skill
 
     async def run_steps(self, step_names: List[str], context: Dict[str, Any], parallel: bool = False) -> Dict[str, Any]:
         """[АРХИТЕКТУРА]: Динамический запуск шагов."""
         if parallel:
             logger.info(f"Параллельный запуск навыков: {step_names}")
-            # Создаем копию контекста для каждой ветки
             tasks = [self.skills[name].execute(context.copy()) for name in step_names]
             results = await asyncio.gather(*tasks)
             
-            # Сливаем результаты обратно
             for res in results:
                 context["tokens"] = context.get("tokens", 0) + res.get("tokens", 0)
                 context["cost"] = context.get("cost", 0.0) + res.get("cost", 0.0)
@@ -149,7 +151,6 @@ class AgentOrchestrator:
         return context
 
     async def run_generate_pipeline(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        # 1. Каркас -> 2. Валидация
         context = await self.run_steps(["curriculum", "validation"], context)
         
         await save_session(
@@ -176,14 +177,10 @@ class AgentOrchestrator:
             "constraints": session.get("constraints"), "tokens": session.get("tokens_used", 0), "cost": session.get("cost_rub", 0.0)
         }
         
-        # Параллельный запуск всех генераторов контента
         content_steps = ["tests", "lectures", "seminars", "slides", "work_programs", "bibliography"]
         context = await self.run_steps(content_steps, context, parallel=True)
-        
-        # Валидация контента
         context = await self.run_steps(["validation"], context)
         
-        # Сборка итогового контента
         content = {
             "tests": context.get("tests", []),
             "lectures": context.get("lectures", []),
@@ -230,7 +227,7 @@ class AgentOrchestrator:
         }
 
 # ==========================================
-# ПУБЛИЧНЫЕ ФУНКЦИИ (Для main.py)
+# ПУБЛИЧНЫЕ ФУНКЦИИ
 # ==========================================
 
 orchestrator = AgentOrchestrator()
