@@ -149,32 +149,30 @@ def approve_and_generate(session_id: str, token_limit: int = 50000):
         return {"error": f"Ошибка генерации контента: {str(e)}"}
 
 def revise_session(session_id: str, instruction: str, token_limit: int = 50000):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка каркаса."""
     session = get_session(session_id)
     if not session:
         return {"error": "Сессия не найдена"}
         
-    logger.info(f"Точечная правка сессии {session_id}: {instruction}")
+    logger.info(f"Точечная правка {session_id}: {instruction}")
     
-    new_framework, tokens, cost = revise_framework_json(session["framework"], instruction, token_limit)
-    
-    total_tokens = session.get("tokens_used", 0) + tokens
-    total_cost = session.get("cost_rub", 0.0) + cost
-    
-    save_session(
-        session_id, new_framework, "waiting_for_approval", 
-        constraints=session.get("constraints"),
-        tokens_used=total_tokens, cost_rub=total_cost
-    )
-    log_action(session_id, "revised")
-    
-    return {
-        "session_id": session_id,
-        "status": "waiting_for_approval",
-        "message": "Каркас обновлен.",
-        "framework": new_framework.model_dump(),
-        "analytics": {
-            "tokens_spent": total_tokens,
-            "cost_rub": round(total_cost, 2)
+    try:
+        new_framework, tokens, cost = revise_framework_json(session["framework"], instruction, token_limit)
+        
+        # Сохраняем обновленный каркас и возвращаем статус waiting_for_approval
+        save_session(
+            session_id, new_framework, "waiting_for_approval", 
+            constraints=session.get("constraints"),
+            tokens_used=session.get("tokens_used", 0) + tokens, 
+            cost_rub=session.get("cost_rub", 0.0) + cost
+        )
+        log_action(session_id, "revised")
+        
+        return {
+            "session_id": session_id,
+            "status": "waiting_for_approval", # Важно вернуть этот статус!
+            "message": "Каркас успешно обновлен согласно вашим правкам.",
+            "framework": new_framework.model_dump()
         }
-    }
+    except Exception as e:
+        logger.error(f"Ошибка при правке: {e}")
+        return {"error": f"Не удалось внести правки: {str(e)}"}

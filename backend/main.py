@@ -30,6 +30,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """[ТРЕБОВАНИЕ КЕЙСА]: Единый формат ошибок для всех эндпоинтов."""
+    logger.error(f"Необработанная ошибка на {request.url.path}: {exc}")
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "status": "error",
+            "error_code": "INTERNAL_SERVER_ERROR",
+            "message": "Внутренняя ошибка сервера. Обратитесь к администратору.",
+            "details": str(exc)
+        }
+    )
+
 # [ТРЕБОВАНИЕ КЕЙСА]: Security Headers
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):

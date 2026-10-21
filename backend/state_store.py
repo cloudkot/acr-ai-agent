@@ -8,7 +8,6 @@ DB_PATH = "sessions.db"
 def init_db():
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Персистентное хранилище сессий, аудита и аналитики.
-    Добавлены колонки для подсчета токенов и стоимости в рублях.
     """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -36,12 +35,12 @@ def init_db():
         )
     ''')
     
-    # Миграция для существующих баз (добавляем колонки, если их нет)
+    # Миграция для существующих баз
     try:
         cursor.execute("ALTER TABLE sessions ADD COLUMN tokens_used INTEGER DEFAULT 0")
         cursor.execute("ALTER TABLE sessions ADD COLUMN cost_rub REAL DEFAULT 0.0")
     except sqlite3.OperationalError:
-        pass # Колонки уже существуют
+        pass
         
     conn.commit()
     conn.close()
@@ -55,10 +54,9 @@ def save_session(
     tokens_used: int = 0,
     cost_rub: float = 0.0
 ):
-    """Сохраняет или обновляет сессию и метрики расхода токенов."""
+    """Сохраняет или обновляет сессию и метрики."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
     content_str = json.dumps(content, ensure_ascii=False) if content else None
     
     cursor.execute('''
@@ -70,7 +68,7 @@ def save_session(
     conn.close()
 
 def get_session(session_id: str) -> dict:
-    """Достает сессию из БД, включая аналитику."""
+    """Достает сессию из БД."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -100,3 +98,23 @@ def log_action(session_id: str, action: str):
         conn.close()
     except Exception as e:
         logger.error(f"Ошибка аудита: {e}")
+
+def get_analytics():
+    """
+    [УНИКАЛЬНАЯ ФИЧА]: Сбор метрик для дашборда.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM sessions WHERE status = 'completed'")
+        completed = cursor.fetchone()[0]
+        conn.close()
+        
+        return {
+            "completed_programs": completed,
+            "estimated_hours_saved": completed * 40, # 40 часов экономии на 1 программу
+            "estimated_cost_rub": completed * 15.0   # Примерная стоимость 15 руб за программу
+        }
+    except Exception as e:
+        logger.error(f"Ошибка аналитики: {e}")
+        return {"completed_programs": 0, "estimated_hours_saved": 0, "estimated_cost_rub": 0.0}
