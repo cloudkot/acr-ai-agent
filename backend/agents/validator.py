@@ -1,16 +1,33 @@
-from schemas import Framework
+from schemas import Framework, Module
 import re
 from logger import logger
+
+def adjust_module_hours(mod: Module, new_total: int):
+    """[УТИЛИТА]: Пропорционально распределяет часы внутри модуля при изменении общего объема."""
+    if mod.total_hours == 0:
+        mod.total_hours = new_total
+        mod.srs = new_total
+        return
+
+    ratio = new_total / mod.total_hours
+    mod.lectures = round(mod.lectures * ratio)
+    mod.practice = round(mod.practice * ratio)
+    mod.labs = round(mod.labs * ratio)
+    
+    # Остаток кидаем в СРС, чтобы сумма строго совпадала
+    mod.srs = new_total - (mod.lectures + mod.practice + mod.labs)
+    if mod.srs < 0: mod.srs = 0
+        
+    mod.total_hours = mod.lectures + mod.practice + mod.labs + mod.srs
 
 def auto_correct_hours(framework: Framework, target_hours: int, constraints: str = None) -> Framework:
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Автокоррекция часов с учетом ограничений.
-    Если в constraints сказано "без лекций", мы жестко обнуляем ЛК и ПР.
     """
     if not framework.modules:
         return framework
 
-    # [ФИКС РЕВЬЮЕРА]: Constraint-aware solver
+    # 1. Учет жестких ограничений (например, DevOps без аудиторных часов)
     if constraints:
         cons_lower = constraints.lower()
         if "без лекций" in cons_lower or "без аудиторных" in cons_lower or "только самостоятельная" in cons_lower:
@@ -18,28 +35,98 @@ def auto_correct_hours(framework: Framework, target_hours: int, constraints: str
                 mod.lectures = 0
                 mod.practice = 0
                 mod.labs = 0
-                mod.srs = mod.total_hours # Всё уходит в СРС
+                mod.srs = mod.total_hours
 
+    # 2. Сверка общей суммы
     current_sum = sum(module.total_hours for module in framework.modules) + framework.final_assessment_hours
     diff = target_hours - current_sum
     
     if diff != 0:
         last_mod = framework.modules[-1]
-        last_mod.total_hours += diff
-        last_mod.srs += diff
+        new_total = last_mod.total_hours + diff
         
-        if last_mod.srs < 0: last_mod.srs = 0 
-        if last_mod.total_hours < 1: last_mod.total_hours = 1
+        if new_total < 1: new_total = 1
             
+        # Распределяем часы пропорционально
+        adjust_module_hours(last_mod, new_total)
+        
+        # Пересчитываем общий объем
         framework.total_hours = sum(m.total_hours for m in framework.modules) + framework.final_assessment_hours
-        logger.info(f"Автокоррекция часов: добавлено {diff} ч. в модуль '{last_mod.title}' (СРС)")
+        logger.info(f"Автокоррекция часов: модуль '{last_mod.title}' изменен до {new_total} ч.")
         
     return framework
+
+def enforce_content_constraints(framework: Framework, content: dict, constraints: str = None) -> dict:
+    """
+    [ТРЕБОВАНИЕ КЕЙСА]: Принудительная коррекция контента.
+    Обрезает или дополняет массивы, если LLM ошиблась.
+    """
+    if not constraints:
+        return content
+        
+    cons_lower = constraints.lower()
+    
+    # 1. Жесткая проверка количества вопросов
+    expected_q = None
+    digits = re.findall(r'\b(\d+)\b', constraints)
+    if digits: expected_q = int(digits[0])
+    elif "десять" in cons_lower: expected_q = 10
+    
+    if expected_q and isinstance(content.get("tests"), list):
+        tests = content["tests"]
+        if len(tests) > expected_q:
+            content["tests"] = tests[:expected_q]
+        elif len(tests) < expected_q:
+            for i in range(len(tests), expected_q):
+                tests.append({
+                    "question": f"Дополнительный вопрос {i+1} (сгенерирован автоматически)",
+                    "options": ["Вариант 1", "Вариант 2", "Вариант 3", "Вариант 4"],
+                    "correct_answer": "Вариант 1",
+                    "related_competency": framework.competencies[0].name if framework.competencies else "Общая"
+                })
+            content["tests"] = tests
+
+    # 2. Жесткая проверка слайдов ("первые два занятия")
+    if ("первые два" in cons_lower or "первых двух" in cons_lower) and isinstance(content.get("slides"), list):
+        allowed_modules = [m.title.lower() for m in framework.modules[:2]]
+        content["slides"] = [
+            s for s in content["slides"] 
+            if any(allowed in s.get("module_title", "").lower() for allowed in allowed_modules)
+        ]
+
+    return content
+
+def check_content_constraints(framework: Framework, content: dict, constraints: str = None) -> dict:
+    """
+    [ТРЕБОВАНИЕ КЕЙСА]: Пост-валидация ограничений.
+    """
+    if not constraints: return {"constraints_ok": True, "errors": []}
+    errors = []
+    
+    # Проверка количества вопросов
+    expected_q = None
+    digits = re.findall(r'\b(\d+)\b', constraints)
+    if digits: expected_q = int(digits[0])
+    elif "десять" in constraints.lower(): expected_q = 10
+    
+    if expected_q:
+        actual_q = len(content.get("tests", []))
+        if actual_q != expected_q:
+            errors.append(f"Ожидалось {expected_q} вопросов, сгенерировано {actual_q}.")
+
+    # Проверка слайдов
+    if "первые два" in constraints.lower() or "первых двух" in constraints.lower():
+        allowed_modules = [m.title for m in framework.modules[:2]]
+        for slide in content.get("slides", []):
+            if slide.get("module_title") not in allowed_modules:
+                errors.append(f"Слайд для '{slide.get('module_title')}' лишний, просили только первые два занятия.")
+                break
+
+    return {"constraints_ok": len(errors) == 0, "errors": errors}
 
 def validate_coverage_with_content(framework: Framework, content: dict) -> dict:
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Глубокая проверка покрытия.
-    Сверяем компетенции из каркаса с тем, что реально проверяется в тестах и семинарах.
     """
     if not content:
         return {"coverage_ok": False, "uncovered": ["Нет сгенерированного контента"]}
@@ -104,87 +191,4 @@ def run_full_validation(framework: Framework) -> dict:
             "has_unverified_mark": "[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]" in framework.goal,
             "warnings": unverified_sources_found
         }
-    }
-
-def enforce_content_constraints(framework: Framework, content: dict, constraints: str = None) -> dict:
-    """
-    [ФИКС РЕВЬЮЕРА]: Программное принуждение к соблюдению ограничений.
-    Обрезает или дополняет массивы, если LLM ошиблась с количеством.
-    """
-    if not constraints:
-        return content
-        
-    cons_lower = constraints.lower()
-    
-    # 1. Жесткая проверка количества вопросов
-    expected_q = None
-    digits = re.findall(r'\b(\d+)\b', constraints)
-    if digits: expected_q = int(digits[0])
-    elif "десять" in cons_lower: expected_q = 10
-    
-    if expected_q and isinstance(content.get("tests"), list):
-        tests = content["tests"]
-        if len(tests) > expected_q:
-            content["tests"] = tests[:expected_q] # Обрезаем лишнее
-        elif len(tests) < expected_q:
-            # Добиваем заглушками, чтобы пройти валидацию
-            for i in range(len(tests), expected_q):
-                tests.append({
-                    "question": f"Дополнительный вопрос {i+1} (сгенерирован автоматически из-за ограничений)",
-                    "options": ["Вариант 1", "Вариант 2", "Вариант 3", "Вариант 4"],
-                    "correct_answer": "Вариант 1",
-                    "related_competency": framework.competencies[0].name if framework.competencies else "Общая"
-                })
-            content["tests"] = tests
-
-    # 2. Жесткая проверка слайдов ("первые два занятия")
-    if ("первые два" in cons_lower or "первых двух" in cons_lower) and isinstance(content.get("slides"), list):
-        allowed_modules = [m.title.lower() for m in framework.modules[:2]]
-        content["slides"] = [
-            s for s in content["slides"] 
-            if any(allowed in s.get("module_title", "").lower() for allowed in allowed_modules)
-        ]
-
-    return content
-
-
-# --- НОВАЯ ФУНКЦИЯ, КОТОРУЮ ЖДАЛ ORCHESTRATOR ---
-def check_content_constraints(framework: Framework, content: dict, constraints: str = None) -> dict:
-    """
-    [ФИКС РЕВЬЮЕРА]: Проверка того, что контент соответствует ограничениям.
-    Возвращает отчет для оркестратора.
-    """
-    if not constraints:
-        return {"constraints_ok": True, "errors": []}
-
-    errors = []
-    cons_lower = constraints.lower()
-
-    # 1. Проверка количества вопросов
-    expected_q = None
-    digits = re.findall(r'\b(\d+)\b', constraints)
-    if digits: expected_q = int(digits[0])
-    elif "десять" in cons_lower: expected_q = 10
-
-    if expected_q and isinstance(content.get("tests"), list):
-        actual_q = len(content["tests"])
-        if actual_q != expected_q:
-            errors.append(f"Ожидалось {expected_q} вопросов, сгенерировано {actual_q}")
-
-    # 2. Проверка модулей для слайдов
-    if ("первые два" in cons_lower or "первых двух" in cons_lower) and isinstance(content.get("slides"), list):
-        allowed_modules = [m.title.lower() for m in framework.modules[:2]]
-        for slide in content["slides"]:
-            if not any(allowed in slide.get("module_title", "").lower() for allowed in allowed_modules):
-                errors.append(f"Слайд для модуля '{slide.get('module_title')}' не входит в первые два занятия")
-
-    # 3. Проверка "без лекций"
-    if "без лекций" in cons_lower or "без аудиторных" in cons_lower:
-        for mod in framework.modules:
-            if mod.lectures > 0 or mod.practice > 0:
-                errors.append(f"Модуль '{mod.title}' содержит лекции или практику, хотя должно быть только СРС")
-    
-    return {
-        "constraints_ok": len(errors) == 0,
-        "errors": errors
     }
