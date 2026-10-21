@@ -1,16 +1,16 @@
 import json
 import re
 import asyncio
-from cloud import ask_llm
+from cloud import ask_llm, MODEL_FAST
 from schemas import Framework
 from utils.json_parser import extract_json_from_text
 from logger import logger
 
-# [ФИКС]: Снижаем до 3, чтобы виртуалка не падала по памяти (OOM Killed)
-MAX_CONCURRENT_REQUESTS = 3
+# [ФИКС РЕВЬЮЕРА]: Увеличили семафор до 5 для ускорения на 500 часах
+MAX_CONCURRENT_REQUESTS = 5
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-async def _generate_async_retry(prompt: str, task_type: str = "content", retries: int = 3) -> tuple[any, int, float]:
+async def _generate_async_retry(prompt: str, fallback_prompt: str = None, task_type: str = "content", retries: int = 3) -> tuple[any, int, float]:
     total_tokens = 0
     total_cost = 0.0
     async with semaphore:
@@ -24,10 +24,23 @@ async def _generate_async_retry(prompt: str, task_type: str = "content", retries
                 return data, total_tokens, total_cost
             except Exception as e:
                 logger.warning(f"Ошибка генерации ({attempt+1}/{retries}): {e}")
-                if attempt == retries - 1: raise RuntimeError(f"Сбой: {e}")
-                await asyncio.sleep(3)
+                if attempt == retries - 1: 
+                    # [ФИКС РЕВЬЮЕРА]: ML-склейка. Если основной промпт упал, делаем упрощенный запрос к быстрой модели.
+                    if fallback_prompt:
+                        logger.info("Запуск LLM-fallback (упрощенный запрос)...")
+                        try:
+                            raw_fb, t_fb, c_fb = await ask_llm(fallback_prompt, MODEL_FAST, True)
+                            total_tokens += t_fb
+                            total_cost += c_fb
+                            data_fb = extract_json_from_text(raw_fb)
+                            if data_fb: return data_fb, total_tokens, total_cost
+                        except Exception as e_fb:
+                            logger.error(f"LLM-fallback тоже упал: {e_fb}")
+                    
+                    raise RuntimeError(f"Сбой после {retries} попыток: {e}")
+                await asyncio.sleep(2)
 
-# Заглушки (оставляем как есть, они хорошие)
+# Заглушки (оставляем как есть)
 def _fallback_seminar(framework: Framework, mod_title: str, mod_hours: int) -> dict:
     comps = [c.name for c in framework.competencies if any(mod_title.lower() in t.lower() for t in c.related_topics)]
     task = f"Разработать практический кейс по модулю '{mod_title}' ({mod_hours} ч.). Отработать навыки: {', '.join(comps) if comps else 'основные инструменты'}."
@@ -68,8 +81,6 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""
 
     total_hours = framework.total_hours
-    
-    # [ФИКС]: 1 вопрос на каждые 15 часов (для 500 ч = 33 вопроса)
     target_q = max(10, total_hours // 15)
     if constraints:
         match = re.search(r'(\d+)\s*(вопрос|тест|задани)', constraints.lower())
@@ -85,12 +96,14 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     async def fetch_tests_batch(batch_size: int, part_num: int):
         prompt = f"""
         <role>Тестолог.</role><context>{base_json}</context>{constraints_context}
-        <task>Составь ровно {batch_size} РАЗНЫХ тестовых вопросов (часть {part_num}). Вопросы должны быть сложными и специфичными.</task>
-        <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown. correct_answer должен быть строкой из options.</rules>
+        <task>Составь ровно {batch_size} РАЗНЫХ тестовых вопросов (часть {part_num}). Вопросы должны быть специфичными.</task>
+        <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown.</rules>
         <format>[{{"question":"...", "options":["1","2","3","4"], "correct_answer":"1", "related_competency":"..."}}]</format>
         """
+        # Упрощенный fallback-промпт
+        fallback_prompt = f"Составь {batch_size} тестовых вопроса по теме {framework.goal[:50]}. Формат JSON: [{{'question':'...', 'options':['1','2','3','4'], 'correct_answer':'1', 'related_competency':'...'}}]"
         try:
-            data, t, c = await _generate_async_retry(prompt, "content")
+            data, t, c = await _generate_async_retry(prompt, fallback_prompt, "content")
             _accumulate(t, c)
             if isinstance(data, dict): data = data.get("questions", [data])
             if isinstance(data, list): return [x for x in data if isinstance(x, dict) and x.get("question") and x.get("question") != "None"]
@@ -98,15 +111,15 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         except Exception: return []
 
     async def fetch_single_lecture(mod_title: str):
-        # [ФИКС]: Просим развернутые абзацы, а не просто заголовки
         prompt = f"""
         <role>Лектор.</role><context>{base_json}</context>{constraints_context}
-        <task>Составь подробный план лекции для модуля "{mod_title}". Напиши 3-4 тезиса, каждый из которых состоит из 2-3 предложений. Раскрой конкретные технологии и методы.</task>
-        <rules>Верни ТОЛЬКО JSON-массив из одного объекта. Поле module_title должно быть ровно "{mod_title}".</rules>
-        <format>[{{"module_title":"{mod_title}", "theses":["Подробный тезис с объяснением 1...", "Подробный тезис 2..."]}}]</format>
+        <task>Составь подробный план лекции для модуля "{mod_title}". Напиши 3-4 тезиса, каждый по 2-3 предложения.</task>
+        <rules>Верни ТОЛЬКО JSON-массив из одного объекта. module_title = "{mod_title}".</rules>
+        <format>[{{"module_title":"{mod_title}", "theses":["...", "..."]}}]</format>
         """
+        fallback_prompt = f"Напиши 3 тезиса для лекции по теме '{mod_title}'. Формат JSON: [{{'module_title':'{mod_title}', 'theses':['...', '...']}}]"
         try:
-            data, t, c = await _generate_async_retry(prompt, "content")
+            data, t, c = await _generate_async_retry(prompt, fallback_prompt, "content")
             _accumulate(t, c)
             if isinstance(data, dict): data = data.get("modules_plan", [])
             if isinstance(data, list) and len(data) > 0: return data[0]
@@ -116,12 +129,13 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     async def fetch_single_seminar(mod_title: str, mod_hours: int):
         prompt = f"""
         <role>Практик.</role><context>{base_json}</context>{constraints_context}
-        <task>Составь ОДНО практическое задание (кейс) для модуля "{mod_title}" ({mod_hours} ч.). Опиши конкретную ситуацию, проблему и шаги решения.</task>
-        <rules>Верни ТОЛЬКО JSON-массив из одного объекта. Поле module_title должно быть ровно "{mod_title}".</rules>
+        <task>Составь ОДНО практическое задание (кейс) для модуля "{mod_title}" ({mod_hours} ч.).</task>
+        <rules>Верни ТОЛЬКО JSON-массив из одного объекта. module_title = "{mod_title}".</rules>
         <format>[{{"module_title":"{mod_title}", "task":"...", "criteria":"...", "related_competency":"..."}}]</format>
         """
+        fallback_prompt = f"Придумай 1 практическое задание для модуля '{mod_title}'. Формат JSON: [{{'module_title':'{mod_title}', 'task':'...', 'criteria':'...', 'related_competency':'...'}}]"
         try:
-            data, t, c = await _generate_async_retry(prompt, "content")
+            data, t, c = await _generate_async_retry(prompt, fallback_prompt, "content")
             _accumulate(t, c)
             if isinstance(data, dict): data = data.get("seminars", [data])
             if isinstance(data, list) and len(data) > 0: return data[0]
@@ -132,11 +146,12 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         prompt = f"""
         <role>Дизайнер.</role><context>{base_json}</context>{constraints_context}
         <task>Структура слайдов для модуля "{mod_title}".</task>
-        <rules>Верни ТОЛЬКО JSON-массив. Поле module_title должно быть ровно "{mod_title}".</rules>
+        <rules>Верни ТОЛЬКО JSON-массив. module_title = "{mod_title}".</rules>
         <format>[{{"slide_title":"...", "module_title":"{mod_title}", "bullets":["1","2"]}}]</format>
         """
+        fallback_prompt = f"Придумай 2 слайда для модуля '{mod_title}'. Формат JSON: [{{'slide_title':'...', 'module_title':'{mod_title}', 'bullets':['1','2']}}]"
         try:
-            data, t, c = await _generate_async_retry(prompt, "content")
+            data, t, c = await _generate_async_retry(prompt, fallback_prompt, "content")
             _accumulate(t, c)
             if isinstance(data, dict): data = data.get("slides", [])
             if isinstance(data, list): return [x for x in data if isinstance(x, dict)]
@@ -146,12 +161,13 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     async def fetch_single_work_program(mod_title: str):
         prompt = f"""
         <role>Методист.</role><context>{base_json}</context>{constraints_context}
-        <task>Рабочая программа для модуля "{mod_title}". Напиши 3-4 предложения о том, что будет изучено и какие практические навыки будут получены.</task>
-        <rules>Верни ТОЛЬКО JSON-массив из одного объекта. Поле module_title должно быть ровно "{mod_title}".</rules>
+        <task>Рабочая программа для модуля "{mod_title}". Напиши 3-4 предложения.</task>
+        <rules>Верни ТОЛЬКО JSON-массив из одного объекта. module_title = "{mod_title}".</rules>
         <format>[{{"module_title":"{mod_title}", "description":"..."}}]</format>
         """
+        fallback_prompt = f"Напиши краткое описание программы для модуля '{mod_title}'. Формат JSON: [{{'module_title':'{mod_title}', 'description':'...'}}]"
         try:
-            data, t, c = await _generate_async_retry(prompt, "content")
+            data, t, c = await _generate_async_retry(prompt, fallback_prompt, "content")
             _accumulate(t, c)
             if isinstance(data, dict): data = data.get("work_programs", [])
             if isinstance(data, list) and len(data) > 0: return data[0]
@@ -161,12 +177,13 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     async def fetch_bibliography():
         prompt = f"""
         <role>Библиотекарь.</role><context>{base_json}</context>{constraints_context}
-        <task>Список 5-7 конкретных книг или статей.</task>
+        <task>Список 5-7 книг.</task>
         <rules>Верни ТОЛЬКО JSON-массив строк.</rules>
         <format>["Автор. Название. Год."]</format>
         """
+        fallback_prompt = "Дай список из 5 книг по IT. Формат JSON: ['Автор. Название. Год.', ...]"
         try:
-            data, t, c = await _generate_async_retry(prompt, "content")
+            data, t, c = await _generate_async_retry(prompt, fallback_prompt, "content")
             _accumulate(t, c)
             if isinstance(data, dict): data = data.get("bibliography", [])
             if isinstance(data, list): return [str(x) for x in data if isinstance(x, str)]
@@ -200,7 +217,6 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     logger.info(f"Запуск {len(all_tasks)} задач (семафор {MAX_CONCURRENT_REQUESTS})...")
     results = await asyncio.gather(*all_tasks, return_exceptions=True)
 
-    # Сборка результатов
     all_tests, final_lectures, final_seminars = [], [], []
     all_work_programs, all_slides, all_bibliography = [], [], []
 
