@@ -89,10 +89,9 @@ export interface ContentResponse {
 }
 
 export interface Analytics {
-  total_sessions: number;
   completed_programs: number;
-  estimated_hours_saved: number;
-  estimated_cost_rub: number;
+  total_tokens_used: number;
+  total_cost_rub: number;
 }
 
 // 0. Загрузка референса

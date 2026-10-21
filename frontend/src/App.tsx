@@ -5,7 +5,7 @@ import {
   FileText, BookOpen, GraduationCap, RotateCcw, 
   Sparkles, FileDown, Presentation, Moon, Sun,
   Minus, Plus, AlertCircle, Paperclip, X, Library,
-  TrendingUp, Clock, Coins
+  TrendingUp, Coins, Cpu
 } from 'lucide-react';
 import { 
   generateFramework, 
@@ -140,7 +140,7 @@ function MainApp() {
   };
 
   const handleGenerate = async () => {
-    if (!topic.trim() || topic.trim().length < 3) { setError('Тема слишком короткая (минимум 3 символа)'); return; }
+    if (!topic.trim() || topic.trim().length < 2) { setError('Тема слишком короткая (минимум 2 символа)'); return; }
     
     let finalHours = parseInt(hoursInput, 10);
     if (isNaN(finalHours) || finalHours < 16 || finalHours > 500) {
@@ -189,6 +189,14 @@ function MainApp() {
       const res = await approveFramework(sessionId);
       setContent(res);
       setScreen('result');
+      
+      // [ФИКС]: Обновляем аналитику после успешной генерации
+      try {
+        const updatedAnalytics = await getAnalytics();
+        setAnalytics(updatedAnalytics);
+      } catch (e) {
+        console.warn('Не удалось обновить аналитику:', e);
+      }
     } catch (e: any) {
       setError(e.message || 'Ошибка утверждения');
     } finally {
@@ -523,7 +531,7 @@ function MainApp() {
               </div>
             </div>
 
-            {/* ВИДЖЕТ АНАЛИТИКИ (ПЕРЕНЕСЕН СЮДА) */}
+            {/* ВИДЖЕТ АНАЛИТИКИ — ОБНОВЛЕННЫЙ (3 цифры: программы, токены, рубли) */}
             {analytics && (
               <div className="flex gap-2 sm:gap-4 p-4 bg-white dark:bg-gray-800 rounded-2xl border border-blue-100 dark:border-blue-900/50 shadow-lg">
                 <div className="flex-1 text-center border-r border-gray-100 dark:border-gray-700">
@@ -531,11 +539,11 @@ function MainApp() {
                   <div className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wide mt-1 flex items-center justify-center gap-1"><TrendingUp className="w-3 h-3"/> Программ</div>
                 </div>
                 <div className="flex-1 text-center border-r border-gray-100 dark:border-gray-700">
-                  <div className="text-xl sm:text-2xl font-extrabold text-green-600 dark:text-green-400">{analytics.estimated_hours_saved} ч.</div>
-                  <div className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wide mt-1 flex items-center justify-center gap-1"><Clock className="w-3 h-3"/> Сэкономлено</div>
+                  <div className="text-xl sm:text-2xl font-extrabold text-purple-600 dark:text-purple-400">{analytics.total_tokens_used.toLocaleString()}</div>
+                  <div className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wide mt-1 flex items-center justify-center gap-1"><Cpu className="w-3 h-3"/> Токенов</div>
                 </div>
                 <div className="flex-1 text-center">
-                  <div className="text-xl sm:text-2xl font-extrabold text-purple-600 dark:text-purple-400">{analytics.estimated_cost_rub} ₽</div>
+                  <div className="text-xl sm:text-2xl font-extrabold text-green-600 dark:text-green-400">{analytics.total_cost_rub} ₽</div>
                   <div className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wide mt-1 flex items-center justify-center gap-1"><Coins className="w-3 h-3"/> Потрачено</div>
                 </div>
               </div>
@@ -618,21 +626,17 @@ function MainApp() {
               </div>
             )}
 
+            {/* БИБЛИОГРАФИЯ — ИСПРАВЛЕНО: теперь выводим строку, а не объект */}
             {content.content?.bibliography && content.content.bibliography.length > 0 && (
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
                 <div className="flex items-center gap-2 text-sm font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-4">
                   <Library className="w-5 h-5" /> Библиография
                 </div>
                 <ul className="space-y-2 text-sm">
-                  {content.content.bibliography.map((item, idx) => (
+                  {content.content.bibliography.map((book, idx) => (
                     <li key={idx} className="flex items-start gap-2 text-gray-700 dark:text-gray-300">
                       <span className="text-indigo-500 font-bold mt-0.5">[{idx + 1}]</span>
-                      <span>
-                        {item.author && <span className="font-medium">{item.author}. </span>}
-                        <span className="italic">«{item.title}»</span>
-                        {item.year && <span>. — {item.year}.</span>}
-                        {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-blue-500 underline ml-2">Ссылка</a>}
-                      </span>
+                      <span>{typeof book === 'string' ? book : JSON.stringify(book)}</span>
                     </li>
                   ))}
                 </ul>
