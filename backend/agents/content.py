@@ -1,5 +1,4 @@
 import json
-import time
 import re
 import asyncio
 from cloud import ask_llm
@@ -8,31 +7,52 @@ from utils.json_parser import extract_json_from_text
 from logger import logger
 
 async def _generate_async_retry(prompt: str, task_type: str = "content", retries: int = 3) -> tuple[any, int, float]:
-    """[ТРЕБОВАНИЕ КЕЙСА]: Асинхронная обертка с ретраями."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Асинхронная обертка с ретраями (без to_thread)."""
     total_tokens = 0
     total_cost = 0.0
-    
     for attempt in range(retries):
         try:
-            raw, tokens, cost = await asyncio.to_thread(ask_llm, prompt, task_type, True)
+            # [АРХИТЕКТУРА]: Прямой вызов асинхронного ask_llm
+            raw, tokens, cost = await ask_llm(prompt, task_type, True)
             total_tokens += tokens
             total_cost += cost
-            
             data = extract_json_from_text(raw)
-            if not data:
-                raise ValueError("Пустой ответ от LLM")
+            if not data: raise ValueError("Пустой ответ от LLM")
             return data, total_tokens, total_cost
         except Exception as e:
             logger.warning(f"Ошибка генерации ({attempt+1}/{retries}): {e}")
-            if attempt == retries - 1:
-                raise RuntimeError(f"Сбой после {retries} попыток: {e}")
+            if attempt == retries - 1: raise RuntimeError(f"Сбой после {retries} попыток: {e}")
             await asyncio.sleep(1.5)
 
+def _generate_fallback_seminar(module_title: str, module_hours: int) -> dict:
+    """[ML-СКЛЕЙКА]: Алгоритмический fallback для семинара, если LLM не справилась."""
+    return {
+        "module_title": module_title,
+        "task": f"Практическое задание по модулю '{module_title}' ({module_hours} ч.): разработать и продемонстрировать сквозной сценарий применения изученных технологий.",
+        "criteria": "Критерии оценки: 1) Полнота решения; 2) Корректность применения инструментов; 3) Защита решения перед комиссией.",
+        "related_competency": "Разработка и защита проектных решений"
+    }
+
+def _validate_and_glue_seminars(framework: Framework, generated_seminars: list) -> list:
+    """
+    [ML-СКЛЕЙКА]: Проверяет, что для КАЖДОГО модуля есть семинар.
+    Если LLM пропустила модуль или вернула None, генерирует алгоритмический fallback.
+    """
+    final_seminars = []
+    for mod in framework.modules:
+        # Ищем семинар, сгенерированный LLM для этого модуля
+        found = next((s for s in generated_seminars if mod.title.lower() in s.get("module_title", "").lower()), None)
+        
+        if found and found.get("task") and found.get("task") != "None":
+            final_seminars.append(found)
+        else:
+            logger.info(f"[ML-СКЛЕЙКА] Сгенерирован fallback для семинара модуля: {mod.title}")
+            final_seminars.append(_generate_fallback_seminar(mod.title, mod.total_hours))
+            
+    return final_seminars
+
 async def generate_content_pack(framework: Framework, constraints: str = None) -> dict:
-    """
-    [АРХИТЕКТУРА]: Параллельная генерация контента.
-    Все результаты жестко приводятся к спискам словарей.
-    """
+    """[АРХИТЕКТУРА]: Истинно параллельная генерация контента с батчингом."""
     compact_data = {
         "template_type": framework.template_type,
         "prof_standard": framework.prof_standard,
@@ -46,6 +66,8 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     total_hours = framework.total_hours
     num_modules = len(framework.modules)
     
+    # Батчинг для семинаров
+    batch_size = 3
     target_q = max(10, total_hours // 24)
     if constraints:
         match = re.search(r'(\d+)\s*(вопрос|тест|задани)', constraints.lower())
@@ -61,23 +83,40 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         <format>[{{"question":"...", "options":["1","2","3","4"], "correct_answer":"1", "related_competency":"..."}}]</format>
         """
         data, t, c = await _generate_async_retry(prompt, "content")
-        # Жесткая валидация
         if isinstance(data, dict): data = data.get("questions", [data])
         if not isinstance(data, list): data = []
         return [x for x in data if isinstance(x, dict)][:target_q], t, c
 
     async def task_seminars():
-        prompt = f"""
-        <role>Практик.</role><context>{compact_json}</context>{constraints_context}
-        <task>Составь практические задания (по одному на каждый из {num_modules} модулей).</task>
-        <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown.</rules>
-        <format>[{{"module_title":"...", "task":"...", "criteria":"...", "related_competency":"..."}}]</format>
-        """
-        data, t, c = await _generate_async_retry(prompt, "content")
-        # Жесткая валидация (фикс ошибки str)
-        if isinstance(data, dict): data = data.get("seminars", [data])
-        if not isinstance(data, list): data = []
-        return [x for x in data if isinstance(x, dict)], t, c
+        # Батчинг для больших программ
+        all_seminars = []
+        total_t = 0
+        total_c = 0.0
+        
+        for i in range(0, num_modules, batch_size):
+            batch = framework.modules[i:i+batch_size]
+            batch_titles = [m.title for m in batch]
+            
+            prompt = f"""
+            <role>Практик.</role><context>{compact_json}</context>{constraints_context}
+            <task>Составь практические задания ТОЛЬКО для этих модулей: {batch_titles}. По одному на каждый.</task>
+            <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown.</rules>
+            <format>[{{"module_title":"...", "task":"...", "criteria":"...", "related_competency":"..."}}]</format>
+            """
+            try:
+                data, t, c = await _generate_async_retry(prompt, "content")
+                total_t += t
+                total_c += c
+                
+                if isinstance(data, dict): data = data.get("seminars", [data])
+                if isinstance(data, list):
+                    all_seminars.extend([x for x in data if isinstance(x, dict)])
+            except Exception as e:
+                logger.error(f"Ошибка при генерации батча семинаров: {e}")
+                
+        # Применяем ML-склейку
+        final_seminars = _validate_and_glue_seminars(framework, all_seminars)
+        return final_seminars, total_t, total_c
 
     async def task_lectures():
         prompt = f"""
@@ -127,8 +166,8 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         if not isinstance(data, list): data = []
         return [str(x) for x in data if isinstance(x, str)], t, c
 
-    # --- ЗАПУСК ---
-    logger.info(f"Параллельная генерация контента для программы на {total_hours} ч...")
+    # [АРХИТЕКТУРА]: Одновременный запуск всех 6 асинхронных задач
+    logger.info(f"Запуск параллельных HTTP-запросов (6 задач) для {total_hours} ч...")
     
     results = await asyncio.gather(
         task_tests(), task_seminars(), task_lectures(),
@@ -136,7 +175,6 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         return_exceptions=True
     )
 
-    # --- СБОР РЕЗУЛЬТАТОВ ---
     final_content = {
         "tests": [], "seminars": [], "lectures": [], 
         "slides": [], "work_programs": [], "bibliography": [],
@@ -150,19 +188,10 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         if isinstance(res, Exception):
             logger.error(f"Задача '{name}' упала: {res}")
             continue
-            
         data, t_tokens, t_cost = res
         final_content[name] = data
         final_content["total_tokens"] += t_tokens
         final_content["total_cost"] += t_cost
-        
-        # Защита от None в семинарах
-        if name == "seminars":
-            for s in data:
-                if not s.get("task") or s.get("task") == "None" or s.get("task") == "Nope":
-                    s["task"] = "Практическое задание по модулю (описание не сгенерировано)"
-                if not s.get("criteria") or s.get("criteria") == "None" or s.get("criteria") == "Nope":
-                    s["criteria"] = "Оценка выполнения задания"
 
     # Фильтрация слайдов
     if constraints:

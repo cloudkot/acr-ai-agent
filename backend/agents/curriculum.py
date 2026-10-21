@@ -1,11 +1,11 @@
-import time
+import asyncio
 from cloud import ask_llm
 from schemas import Framework
 from utils.json_parser import extract_json_from_text
 from services.rag_service import search_knowledge_base
 from logger import logger
 
-def generate_framework_json(
+async def generate_framework_json(
     topic: str, 
     hours: int, 
     template_type: str = "ДПО", 
@@ -13,7 +13,7 @@ def generate_framework_json(
     constraints: str = None
 ) -> tuple[Framework, int, float]:
     """
-    [АРХИТЕКТУРА]: Curriculum Architect.
+    [АРХИТЕКТУРА]: Curriculum Architect (Асинхронный).
     Возвращает (Framework, потрачено_токенов, стоимость_в_рублях).
     """
     rag_context = search_knowledge_base(topic, template_type)
@@ -74,7 +74,8 @@ def generate_framework_json(
     
     for attempt in range(3):
         try:
-            response_text, tokens, cost = ask_llm(
+            # [ФИКС]: Используем await, так как ask_llm теперь асинхронный
+            response_text, tokens, cost = await ask_llm(
                 prompt, task_type="framework", is_json=True
             )
             total_tokens += tokens
@@ -102,14 +103,14 @@ def generate_framework_json(
             logger.warning(f"Ошибка парсинга JSON от LLM (попытка {attempt+1}): {e}")
             if attempt == 2:
                 raise ValueError(f"LLM не смогла выдать правильный JSON после 3 попыток. Ошибка: {e}")
-            time.sleep(1.5)
+            await asyncio.sleep(1.5)
 
-def revise_framework_json(
+async def revise_framework_json(
     current_framework: Framework, 
     instruction: str
 ) -> tuple[Framework, int, float]:
     """
-    [ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка каркаса.
+    [ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка каркаса (Асинхронная).
     Возвращает (Framework, потрачено_токенов, стоимость_в_рублях).
     """
     current_json = current_framework.model_dump_json(indent=2)
@@ -123,7 +124,8 @@ def revise_framework_json(
     </rules>
     """
     
-    response_text, tokens, cost = ask_llm(
+    # [ФИКС]: Используем await
+    response_text, tokens, cost = await ask_llm(
         prompt, task_type="revision", is_json=True
     )
     

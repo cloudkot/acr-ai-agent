@@ -118,9 +118,9 @@ class ClarifyRequest(BaseModel):
     hours: int | None = None
 
 @app.post("/api/clarify")
-def clarify_endpoint(req: ClarifyRequest):
+async def clarify_endpoint(req: ClarifyRequest):
     """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автовыбор шаблона."""
-    return clarify_and_classify(req.topic, req.hours)
+    return await clarify_and_classify(req.topic, req.hours)
 
 @app.get("/api/analytics")
 def analytics_endpoint():
@@ -130,9 +130,9 @@ def analytics_endpoint():
 # --- ОСНОВНОЙ СЦЕНАРИЙ ---
 
 @app.post("/api/generate")
-def generate_framework_endpoint(req: GenerateRequest):
-    """Шаг 1: Прием запроса и генерация каркаса."""
-    return process_request(
+async def generate_framework_endpoint(req: GenerateRequest):
+    """Шаг 1: Прием запроса и генерация каркаса (Асинхронно)."""
+    return await process_request(
         topic=req.topic, 
         hours=req.hours, 
         template_type=req.template_type, 
@@ -141,9 +141,9 @@ def generate_framework_endpoint(req: GenerateRequest):
     )
 
 @app.post("/api/revise/{session_id}")
-def revise_endpoint(session_id: str, req: RevisionRequest):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка."""
-    return revise_session(session_id, req.instruction)
+async def revise_endpoint(session_id: str, req: RevisionRequest):
+    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка (Асинхронно)."""
+    return await revise_session(session_id, req.instruction)
 
 @app.post("/api/approve/{session_id}")
 async def approve_endpoint(session_id: str):

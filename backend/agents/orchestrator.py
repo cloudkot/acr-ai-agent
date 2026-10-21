@@ -15,16 +15,16 @@ from utils.json_parser import extract_json_from_text
 from logger import logger
 
 # ==========================================
-# [АРХИТЕКТУРА GIGACOWORK]: Описание навыков (Skills)
+# [АРХИТЕКТУРА GIGACOWORK]: Навыки (Skills)
 # ==========================================
 
 class CurriculumSkill(BaseAgent):
     def __init__(self):
         super().__init__("Curriculum Architect", "Генерирует каркас программы, распределяет часы и компетенции.")
         
-    def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Выполнение навыка: Curriculum Architect")
-        fw, tokens, cost = generate_framework_json(
+        fw, tokens, cost = await generate_framework_json(
             context["topic"], 
             context["hours"], 
             context["template_type"], 
@@ -44,7 +44,6 @@ class ContentSkill(BaseAgent):
         logger.info("Выполнение навыка: Content Generator")
         content = await generate_content_pack(context["framework"], context.get("constraints"))
         
-        # Извлекаем статистику токенов
         tokens = content.pop("total_tokens", 0)
         cost = content.pop("total_cost", 0.0)
         
@@ -57,9 +56,9 @@ class RevisionSkill(BaseAgent):
     def __init__(self):
         super().__init__("Revision Agent", "Вносит точечные правки в существующий каркас.")
         
-    def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Выполнение навыка: Revision Agent")
-        fw, tokens, cost = revise_framework_json(
+        fw, tokens, cost = await revise_framework_json(
             context["current_framework"], 
             context["instruction"]
         )
@@ -74,23 +73,20 @@ class RevisionSkill(BaseAgent):
 
 class AgentOrchestrator:
     """
-    Центральный диспетчер, который управляет контекстом и передает его 
-    между независимыми навыками (Skills).
+    Центральный диспетчер. Управляет контекстом и передает его 
+    между независимыми асинхронными навыками.
     """
     def __init__(self):
         self.curriculum_skill = CurriculumSkill()
         self.content_skill = ContentSkill()
         self.revision_skill = RevisionSkill()
 
-    def run_generate_pipeline(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        # 1. Вызов навыка генерации каркаса
-        context = self.curriculum_skill.execute(context)
+    async def run_generate_pipeline(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        context = await self.curriculum_skill.execute(context)
         
-        # 2. Пост-валидация (математика)
         context["framework"] = auto_correct_hours(context["framework"], context["hours"], context.get("constraints"))
         report = run_full_validation(context["framework"])
         
-        # 3. Сохранение состояния
         save_session(
             context["session_id"], context["framework"], "waiting_for_approval", 
             constraints=context.get("constraints"), tokens_used=context["tokens"], cost_rub=context["cost"]
@@ -118,10 +114,8 @@ class AgentOrchestrator:
             "cost": session.get("cost_rub", 0.0)
         }
         
-        # Вызов асинхронного навыка генерации контента
         context = await self.content_skill.execute(context)
         
-        # Пост-валидация (ограничения)
         context["content"] = enforce_content_constraints(context["framework"], context["content"], context.get("constraints"))
         constraints_report = check_content_constraints(context["framework"], context["content"], context.get("constraints"))
         
@@ -144,7 +138,7 @@ class AgentOrchestrator:
             }
         }
 
-    def run_revision_pipeline(self, session_id: str, instruction: str) -> Dict[str, Any]:
+    async def run_revision_pipeline(self, session_id: str, instruction: str) -> Dict[str, Any]:
         session = get_session(session_id)
         if not session:
             return {"error": "Сессия не найдена"}
@@ -157,8 +151,7 @@ class AgentOrchestrator:
             "cost": session.get("cost_rub", 0.0)
         }
         
-        # Вызов навыка правок
-        context = self.revision_skill.execute(context)
+        context = await self.revision_skill.execute(context)
         
         save_session(
             session_id, context["framework"], "waiting_for_approval", 
@@ -179,13 +172,13 @@ class AgentOrchestrator:
         }
 
 # ==========================================
-# ПУБЛИЧНЫЕ ФУНКЦИИ ДЛЯ MAIN.PY
+# ПУБЛИЧНЫЕ АСИНХРОННЫЕ ФУНКЦИИ
 # ==========================================
 
 orchestrator = AgentOrchestrator()
 
-def clarify_and_classify(topic: str, hours: int = None, reference_text: str = None) -> dict:
-    """Уточняющие вопросы и автовыбор шаблона (остается вспомогательной функцией)."""
+async def clarify_and_classify(topic: str, hours: int = None, reference_text: str = None) -> dict:
+    """Уточняющие вопросы и автовыбор шаблона."""
     ref_context = f"\nРеференс: {reference_text[:500]}" if reference_text else ""
     hours_context = f"Объем: {hours} часов." if hours else "Объем НЕ УКАЗАН."
     
@@ -200,7 +193,7 @@ def clarify_and_classify(topic: str, hours: int = None, reference_text: str = No
     <format>{{"template_type": "ДПО", "questions": ["Вопрос 1"]}}</format>
     """
     try:
-        raw, _, _ = ask_llm(prompt, task_type="content", is_json=True)
+        raw, _, _ = await ask_llm(prompt, task_type="content", is_json=True)
         data = extract_json_from_text(raw)
         return {
             "template_type": data.get("template_type", "ДПО"),
@@ -210,8 +203,8 @@ def clarify_and_classify(topic: str, hours: int = None, reference_text: str = No
         logger.error(f"Ошибка автоклассификации: {e}")
         return {"template_type": "ДПО", "questions": []}
 
-def process_request(topic: str, hours: int = None, template_type: str = "auto", reference_text: str = None, constraints: str = None):
-    """Шаг 1: Запуск пайплайна генерации каркаса."""
+async def process_request(topic: str, hours: int = None, template_type: str = "auto", reference_text: str = None, constraints: str = None):
+    """Шаг 1: Запуск асинхронного пайплайна генерации каркаса."""
     session_id = str(uuid.uuid4())
     logger.info(f"Запрос: {topic}, {hours} ч.")
     
@@ -220,7 +213,7 @@ def process_request(topic: str, hours: int = None, template_type: str = "auto", 
         questions = []
         
         if template_type == "auto" or hours is None:
-            classification = clarify_and_classify(topic, hours, reference_text)
+            classification = await clarify_and_classify(topic, hours, reference_text)
             if template_type == "auto":
                 template_type = classification["template_type"]
             questions = classification["questions"]
@@ -242,16 +235,16 @@ def process_request(topic: str, hours: int = None, template_type: str = "auto", 
             "constraints": constraints, "tokens": 0, "cost": 0.0
         }
         
-        return orchestrator.run_generate_pipeline(context)
+        return await orchestrator.run_generate_pipeline(context)
         
     except Exception as e:
         logger.error(f"Ошибка при генерации: {e}")
         return {"session_id": session_id, "status": "error", "message": str(e)}
 
 async def approve_and_generate(session_id: str):
-    """Шаг 2: Утверждение и параллельная генерация контента."""
+    """Шаг 2: Утверждение и асинхронная генерация контента."""
     return await orchestrator.run_content_pipeline(session_id)
 
-def revise_session(session_id: str, instruction: str):
+async def revise_session(session_id: str, instruction: str):
     """Точечная доработка каркаса."""
-    return orchestrator.run_revision_pipeline(session_id, instruction)
+    return await orchestrator.run_revision_pipeline(session_id, instruction)
