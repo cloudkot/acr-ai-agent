@@ -14,12 +14,16 @@ async def generate_framework_json(
 ) -> tuple[Framework, int, float]:
     """
     [АРХИТЕКТУРА]: Curriculum Architect (Асинхронный).
-    Возвращает (Framework, потрачено_токенов, стоимость_в_рублях).
+    Возвращает кортеж: (Framework, потрачено_токенов, стоимость_в_рублях).
     """
+    # 1. Поиск по базе знаний (RAG)
     rag_context = search_knowledge_base(topic, template_type)
+    
+    # 2. Подготовка контекста
     ref_context = f"<reference>{reference_text[:1500]}</reference>" if reference_text else ""
     constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""
 
+    # 3. Формирование строгого промпта
     prompt = f"""
     <role>Ты — экспертный методист Академии цифрового развития (АЦР).</role>
     
@@ -72,9 +76,10 @@ async def generate_framework_json(
     total_tokens = 0
     total_cost = 0.0
     
+    # 4. Генерация с ретраями
     for attempt in range(3):
         try:
-            # [ФИКС]: Используем await, так как ask_llm теперь асинхронный
+            # [ФИКС]: Асинхронный вызов, возвращающий текст, токены, стоимость
             response_text, tokens, cost = await ask_llm(
                 prompt, task_type="framework", is_json=True
             )
@@ -111,7 +116,7 @@ async def revise_framework_json(
 ) -> tuple[Framework, int, float]:
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка каркаса (Асинхронная).
-    Возвращает (Framework, потрачено_токенов, стоимость_в_рублях).
+    Возвращает кортеж: (Framework, потрачено_токенов, стоимость_в_рублях).
     """
     current_json = current_framework.model_dump_json(indent=2)
     
@@ -124,7 +129,7 @@ async def revise_framework_json(
     </rules>
     """
     
-    # [ФИКС]: Используем await
+    # [ФИКС]: Асинхронный вызов
     response_text, tokens, cost = await ask_llm(
         prompt, task_type="revision", is_json=True
     )

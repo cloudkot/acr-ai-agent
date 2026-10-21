@@ -11,6 +11,7 @@ from logger import logger
 class ValidationSkill(BaseAgent):
     """
     [ФИКС РЕВЬЮЕРА]: Валидация вынесена в отдельный навык (Skill).
+    Теперь оркестратор не вызывает бизнес-логику напрямую.
     """
     def __init__(self):
         super().__init__("Validation Agent", "Проверяет математику часов, ограничения и покрытие компетенций.")
@@ -18,12 +19,13 @@ class ValidationSkill(BaseAgent):
     async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Базовый метод, требуемый интерфейсом BaseAgent.
-        Поскольку валидация вызывается по-разному (для каркаса и для контента),
+        Поскольку валидация вызывается специфичными методами (для каркаса и контента),
         мы оставляем этот метод как заглушку, возвращающую контекст.
         """
         return context
 
     async def execute_framework_validation(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Валидация и автокоррекция каркаса программы."""
         logger.info("Выполнение навыка: Валидация каркаса")
         fw = context["framework"]
         hours = context["hours"]
@@ -38,6 +40,7 @@ class ValidationSkill(BaseAgent):
         return context
 
     async def execute_content_validation(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Валидация и принудительная коррекция контента."""
         logger.info("Выполнение навыка: Валидация контента")
         fw = context["framework"]
         content = context["content"]
