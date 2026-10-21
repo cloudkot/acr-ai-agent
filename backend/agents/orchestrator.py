@@ -1,20 +1,191 @@
 import uuid
+from typing import Dict, Any
 from cloud import ask_llm
+from agents.base import BaseAgent
 from agents.curriculum import generate_framework_json, revise_framework_json
 from agents.validator import (
     run_full_validation, 
     auto_correct_hours, 
     check_content_constraints, 
-    enforce_content_constraints, 
-    validate_coverage_with_content
+    enforce_content_constraints
 )
 from agents.content import generate_content_pack
 from state_store import save_session, get_session, log_action
 from utils.json_parser import extract_json_from_text
 from logger import logger
 
+# ==========================================
+# [АРХИТЕКТУРА GIGACOWORK]: Описание навыков (Skills)
+# ==========================================
+
+class CurriculumSkill(BaseAgent):
+    def __init__(self):
+        super().__init__("Curriculum Architect", "Генерирует каркас программы, распределяет часы и компетенции.")
+        
+    def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        logger.info("Выполнение навыка: Curriculum Architect")
+        fw, tokens, cost = generate_framework_json(
+            context["topic"], 
+            context["hours"], 
+            context["template_type"], 
+            context.get("reference_text"), 
+            context.get("constraints")
+        )
+        context["framework"] = fw
+        context["tokens"] = context.get("tokens", 0) + tokens
+        context["cost"] = context.get("cost", 0.0) + cost
+        return context
+
+class ContentSkill(BaseAgent):
+    def __init__(self):
+        super().__init__("Content Generator", "Параллельно генерирует тесты, семинары, лекции, слайды и библиографию.")
+        
+    async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        logger.info("Выполнение навыка: Content Generator")
+        content = await generate_content_pack(context["framework"], context.get("constraints"))
+        
+        # Извлекаем статистику токенов
+        tokens = content.pop("total_tokens", 0)
+        cost = content.pop("total_cost", 0.0)
+        
+        context["content"] = content
+        context["tokens"] = context.get("tokens", 0) + tokens
+        context["cost"] = context.get("cost", 0.0) + cost
+        return context
+
+class RevisionSkill(BaseAgent):
+    def __init__(self):
+        super().__init__("Revision Agent", "Вносит точечные правки в существующий каркас.")
+        
+    def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        logger.info("Выполнение навыка: Revision Agent")
+        fw, tokens, cost = revise_framework_json(
+            context["current_framework"], 
+            context["instruction"]
+        )
+        context["framework"] = fw
+        context["tokens"] = context.get("tokens", 0) + tokens
+        context["cost"] = context.get("cost", 0.0) + cost
+        return context
+
+# ==========================================
+# [АРХИТЕКТУРА]: Оркестратор
+# ==========================================
+
+class AgentOrchestrator:
+    """
+    Центральный диспетчер, который управляет контекстом и передает его 
+    между независимыми навыками (Skills).
+    """
+    def __init__(self):
+        self.curriculum_skill = CurriculumSkill()
+        self.content_skill = ContentSkill()
+        self.revision_skill = RevisionSkill()
+
+    def run_generate_pipeline(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        # 1. Вызов навыка генерации каркаса
+        context = self.curriculum_skill.execute(context)
+        
+        # 2. Пост-валидация (математика)
+        context["framework"] = auto_correct_hours(context["framework"], context["hours"], context.get("constraints"))
+        report = run_full_validation(context["framework"])
+        
+        # 3. Сохранение состояния
+        save_session(
+            context["session_id"], context["framework"], "waiting_for_approval", 
+            constraints=context.get("constraints"), tokens_used=context["tokens"], cost_rub=context["cost"]
+        )
+        log_action(context["session_id"], "generated")
+        
+        return {
+            "session_id": context["session_id"],
+            "status": "waiting_for_approval",
+            "template_type": context["template_type"],
+            "validation_report": report,
+            "framework": context["framework"].model_dump()
+        }
+
+    async def run_content_pipeline(self, session_id: str) -> Dict[str, Any]:
+        session = get_session(session_id)
+        if not session or session["status"] != "waiting_for_approval":
+            return {"error": "Сессия не найдена или уже обработана"}
+            
+        context = {
+            "session_id": session_id, 
+            "framework": session["framework"],
+            "constraints": session.get("constraints"), 
+            "tokens": session.get("tokens_used", 0), 
+            "cost": session.get("cost_rub", 0.0)
+        }
+        
+        # Вызов асинхронного навыка генерации контента
+        context = await self.content_skill.execute(context)
+        
+        # Пост-валидация (ограничения)
+        context["content"] = enforce_content_constraints(context["framework"], context["content"], context.get("constraints"))
+        constraints_report = check_content_constraints(context["framework"], context["content"], context.get("constraints"))
+        
+        save_session(
+            session_id, context["framework"], "completed", 
+            content=context["content"], constraints=context.get("constraints"),
+            tokens_used=context["tokens"], cost_rub=context["cost"]
+        )
+        log_action(session_id, "approved")
+        
+        return {
+            "session_id": session_id, 
+            "status": "completed", 
+            "content": context["content"],
+            "constraints_check": constraints_report,
+            "analytics": {
+                "tokens_spent": context["tokens"], 
+                "cost_rub": round(context["cost"], 2), 
+                "hours_saved": 40.0
+            }
+        }
+
+    def run_revision_pipeline(self, session_id: str, instruction: str) -> Dict[str, Any]:
+        session = get_session(session_id)
+        if not session:
+            return {"error": "Сессия не найдена"}
+            
+        context = {
+            "session_id": session_id,
+            "current_framework": session["framework"],
+            "instruction": instruction,
+            "tokens": session.get("tokens_used", 0),
+            "cost": session.get("cost_rub", 0.0)
+        }
+        
+        # Вызов навыка правок
+        context = self.revision_skill.execute(context)
+        
+        save_session(
+            session_id, context["framework"], "waiting_for_approval", 
+            constraints=session.get("constraints"),
+            tokens_used=context["tokens"], cost_rub=context["cost"]
+        )
+        log_action(session_id, "revised")
+        
+        return {
+            "session_id": session_id,
+            "status": "waiting_for_approval",
+            "message": "Каркас успешно обновлен.",
+            "framework": context["framework"].model_dump(),
+            "analytics": {
+                "tokens_spent": context["tokens"],
+                "cost_rub": round(context["cost"], 2)
+            }
+        }
+
+# ==========================================
+# ПУБЛИЧНЫЕ ФУНКЦИИ ДЛЯ MAIN.PY
+# ==========================================
+
+orchestrator = AgentOrchestrator()
+
 def clarify_and_classify(topic: str, hours: int = None, reference_text: str = None) -> dict:
-    """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автоматический выбор шаблона."""
+    """Уточняющие вопросы и автовыбор шаблона (остается вспомогательной функцией)."""
     ref_context = f"\nРеференс: {reference_text[:500]}" if reference_text else ""
     hours_context = f"Объем: {hours} часов." if hours else "Объем НЕ УКАЗАН."
     
@@ -22,17 +193,13 @@ def clarify_and_classify(topic: str, hours: int = None, reference_text: str = No
     <role>Ты — методист АЦР.</role>
     <request>{topic}</request>
     <context>{hours_context}{ref_context}</context>
-    
     <task>
     1. Определи тип программы: "ДПО" или "Общеразвивающая". Выведи строго одно слово.
     2. Если не указан объем, тип программы, аудитория или форма аттестации — придумай уточняющие вопросы (не больше 4).
-    Если данных достаточно, массив вопросов оставь пустым.
     </task>
-    
-    <format>{{"template_type": "ДПО", "questions": ["Вопрос 1", "Вопрос 2"]}}</format>
+    <format>{{"template_type": "ДПО", "questions": ["Вопрос 1"]}}</format>
     """
     try:
-        # Распаковываем кортеж от ask_llm (текст, токены, стоимость)
         raw, _, _ = ask_llm(prompt, task_type="content", is_json=True)
         data = extract_json_from_text(raw)
         return {
@@ -43,10 +210,10 @@ def clarify_and_classify(topic: str, hours: int = None, reference_text: str = No
         logger.error(f"Ошибка автоклассификации: {e}")
         return {"template_type": "ДПО", "questions": []}
 
-def process_request(topic: str, hours: int = None, template_type: str = "auto", reference_text: str = None, constraints: str = None, token_limit: int = 50000):
-    """[СЦЕНАРИЙ КЕЙСА]: Прием запроса и генерация каркаса с контролем токенов."""
+def process_request(topic: str, hours: int = None, template_type: str = "auto", reference_text: str = None, constraints: str = None):
+    """Шаг 1: Запуск пайплайна генерации каркаса."""
     session_id = str(uuid.uuid4())
-    logger.info(f"Запрос: {topic}, {hours} ч., лимит: {token_limit}")
+    logger.info(f"Запрос: {topic}, {hours} ч.")
     
     try:
         needs_clarification = False
@@ -69,110 +236,22 @@ def process_request(topic: str, hours: int = None, template_type: str = "auto", 
                 "message": "Не хватает данных для генерации."
             }
 
-        # Генерация каркаса (возвращает Framework, tokens, cost)
-        framework_obj, tokens, cost = generate_framework_json(
-            topic, hours, template_type, reference_text, constraints, token_limit
-        )
-        
-        # Автокоррекция часов
-        framework_obj = auto_correct_hours(framework_obj, hours, constraints)
-        report = run_full_validation(framework_obj)
-            
-        # Сохраняем сессию, передавая потраченные токены и стоимость
-        save_session(
-            session_id, framework_obj, "waiting_for_approval", 
-            constraints=constraints, tokens_used=tokens, cost_rub=cost
-        )
-        log_action(session_id, "generated")
-        
-        return {
-            "session_id": session_id,
-            "status": "waiting_for_approval",
-            "template_type": template_type,
-            "validation_report": report,
-            "framework": framework_obj.model_dump()
+        context = {
+            "session_id": session_id, "topic": topic, "hours": hours,
+            "template_type": template_type, "reference_text": reference_text,
+            "constraints": constraints, "tokens": 0, "cost": 0.0
         }
+        
+        return orchestrator.run_generate_pipeline(context)
+        
     except Exception as e:
         logger.error(f"Ошибка при генерации: {e}")
         return {"session_id": session_id, "status": "error", "message": str(e)}
 
-def approve_and_generate(session_id: str, token_limit: int = 50000):
-    """[СЦЕНАРИЙ КЕЙСА]: Утверждение каркаса и генерация контента."""
-    session = get_session(session_id)
-    if not session or session["status"] != "waiting_for_approval":
-        return {"error": "Сессия не найдена или уже обработана"}
-        
-    logger.info(f"Каркас {session_id} утвержден. Генерация контента...")
-    
-    try:
-        constraints = session.get("constraints")
-        
-        # Генерируем контент (возвращает dict с контентом, tokens, cost)
-        content_data = generate_content_pack(session["framework"], constraints, token_limit)
-        
-        # Достаем статистику из контента
-        new_tokens = content_data.pop("total_tokens", 0)
-        new_cost = content_data.pop("total_cost", 0.0)
-        
-        if not content_data.get("tests") and not content_data.get("lectures"):
-            return {"error": "Не удалось сгенерировать материалы."}
+async def approve_and_generate(session_id: str):
+    """Шаг 2: Утверждение и параллельная генерация контента."""
+    return await orchestrator.run_content_pipeline(session_id)
 
-        # Принудительная коррекция
-        content_data = enforce_content_constraints(session["framework"], content_data, constraints)
-        constraints_report = check_content_constraints(session["framework"], content_data, constraints)
-            
-        # Сохраняем сессию, суммируя токены со всех этапов
-        total_tokens = session.get("tokens_used", 0) + new_tokens
-        total_cost = session.get("cost_rub", 0.0) + new_cost
-        
-        save_session(
-            session_id, session["framework"], "completed", 
-            content=content_data, constraints=constraints,
-            tokens_used=total_tokens, cost_rub=total_cost
-        )
-        log_action(session_id, "approved")
-        
-        return {
-            "session_id": session_id, 
-            "status": "completed", 
-            "content": content_data,
-            "constraints_check": constraints_report,
-            # Отдаем аналитику на фронтенд
-            "analytics": {
-                "tokens_spent": total_tokens,
-                "cost_rub": round(total_cost, 2),
-                "hours_saved": 40.0
-            }
-        }
-    except Exception as e:
-        logger.error(f"Ошибка генерации контента: {e}")
-        return {"error": f"Ошибка генерации контента: {str(e)}"}
-
-def revise_session(session_id: str, instruction: str, token_limit: int = 50000):
-    session = get_session(session_id)
-    if not session:
-        return {"error": "Сессия не найдена"}
-        
-    logger.info(f"Точечная правка {session_id}: {instruction}")
-    
-    try:
-        new_framework, tokens, cost = revise_framework_json(session["framework"], instruction, token_limit)
-        
-        # Сохраняем обновленный каркас и возвращаем статус waiting_for_approval
-        save_session(
-            session_id, new_framework, "waiting_for_approval", 
-            constraints=session.get("constraints"),
-            tokens_used=session.get("tokens_used", 0) + tokens, 
-            cost_rub=session.get("cost_rub", 0.0) + cost
-        )
-        log_action(session_id, "revised")
-        
-        return {
-            "session_id": session_id,
-            "status": "waiting_for_approval", # Важно вернуть этот статус!
-            "message": "Каркас успешно обновлен согласно вашим правкам.",
-            "framework": new_framework.model_dump()
-        }
-    except Exception as e:
-        logger.error(f"Ошибка при правке: {e}")
-        return {"error": f"Не удалось внести правки: {str(e)}"}
+def revise_session(session_id: str, instruction: str):
+    """Точечная доработка каркаса."""
+    return orchestrator.run_revision_pipeline(session_id, instruction)

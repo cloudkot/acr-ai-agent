@@ -23,6 +23,7 @@ def adjust_module_hours(mod: Module, new_total: int):
 def auto_correct_hours(framework: Framework, target_hours: int, constraints: str = None) -> Framework:
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Автокоррекция часов с учетом ограничений.
+    Если в constraints сказано "без лекций", мы жестко обнуляем ЛК и ПР.
     """
     if not framework.modules:
         return framework
@@ -30,7 +31,7 @@ def auto_correct_hours(framework: Framework, target_hours: int, constraints: str
     # 1. Учет жестких ограничений (например, DevOps без аудиторных часов)
     if constraints:
         cons_lower = constraints.lower()
-        if "без лекций" in cons_lower or "без аудиторных" in cons_lower or "только самостоятельная" in cons_lower:
+        if "без лекций" in cons_lower or "без аудиторных" in cons_lower or "только самостоятельная" in cons_lower or "стажировка" in cons_lower:
             for mod in framework.modules:
                 mod.lectures = 0
                 mod.practice = 0
@@ -68,7 +69,7 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
     
     # 1. Жесткая проверка количества вопросов
     expected_q = None
-    digits = re.findall(r'\b(\d+)\b', constraints)
+    digits = re.findall(r'(\d+)\s*(вопрос|тест|задани)', cons_lower)
     if digits: expected_q = int(digits[0])
     elif "десять" in cons_lower: expected_q = 10
     
@@ -94,18 +95,26 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
             if any(allowed in s.get("module_title", "").lower() for allowed in allowed_modules)
         ]
 
+    # 3. Жесткая проверка слайдов ("только для pandas")
+    if "pandas" in cons_lower and isinstance(content.get("slides"), list):
+        content["slides"] = [
+            s for s in content["slides"] 
+            if "pandas" in s.get("module_title", "").lower() or "pandas" in s.get("slide_title", "").lower()
+        ]
+
     return content
 
 def check_content_constraints(framework: Framework, content: dict, constraints: str = None) -> dict:
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Пост-валидация ограничений.
+    Проверяет, что LLM реально выполнила то, что просил методист.
     """
     if not constraints: return {"constraints_ok": True, "errors": []}
     errors = []
     
     # Проверка количества вопросов
     expected_q = None
-    digits = re.findall(r'\b(\d+)\b', constraints)
+    digits = re.findall(r'(\d+)\s*(вопрос|тест|задани)', constraints.lower())
     if digits: expected_q = int(digits[0])
     elif "десять" in constraints.lower(): expected_q = 10
     
@@ -114,7 +123,7 @@ def check_content_constraints(framework: Framework, content: dict, constraints: 
         if actual_q != expected_q:
             errors.append(f"Ожидалось {expected_q} вопросов, сгенерировано {actual_q}.")
 
-    # Проверка слайдов
+    # Проверка слайдов ("первые два занятия")
     if "первые два" in constraints.lower() or "первых двух" in constraints.lower():
         allowed_modules = [m.title for m in framework.modules[:2]]
         for slide in content.get("slides", []):
@@ -126,7 +135,7 @@ def check_content_constraints(framework: Framework, content: dict, constraints: 
 
 def validate_coverage_with_content(framework: Framework, content: dict) -> dict:
     """
-    [ТРЕБОВАНИЕ КЕЙСА]: Глубокая проверка покрытия.
+    [ТРЕБОВАНИЕ КЕЙСА]: Глубокая проверка покрытия компетенций.
     """
     if not content:
         return {"coverage_ok": False, "uncovered": ["Нет сгенерированного контента"]}

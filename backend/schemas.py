@@ -6,8 +6,8 @@ class Competency(BaseModel):
     name: str = Field(..., description="Название компетенции")
     knowledge: List[str] = Field(..., min_items=1)
     skills: List[str] = Field(..., min_items=1)
-    # [ТРЕБОВАНИЕ КЕЙСА]: Связь с темами
-    related_topics: List[str] = Field(default_factory=list, description="Темы модулей, где формируется компетенция")
+    # [ТРЕБОВАНИЕ КЕЙСА]: Связь компетенции с темами
+    related_topics: List[str] = Field(default_factory=list, description="Модули, где формируется компетенция")
 
 class Module(BaseModel):
     title: str = Field(..., min_length=3)
@@ -26,11 +26,10 @@ class Framework(BaseModel):
     total_hours: int = Field(..., ge=16, le=500)
     final_assessment_hours: int = Field(default=2, ge=0)
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Модель для персональной аналитики пользователя
 class AnalyticsStats(BaseModel):
     tokens_spent: int = 0
     cost_rub: float = 0.0
-    hours_saved: float = 40.0 # Средняя экономия времени методиста (в часах)
+    hours_saved: float = 40.0
 
 class GenerateRequest(BaseModel):
     topic: str = Field(..., min_length=3, max_length=100)
@@ -38,8 +37,6 @@ class GenerateRequest(BaseModel):
     template_type: Optional[Literal["ДПО", "Общеразвивающая", "auto"]] = Field(default="auto")
     reference_text: Optional[str] = Field(default=None, max_length=15000)
     constraints: Optional[str] = Field(default=None, max_length=1000)
-    # [ТРЕБОВАНИЕ КЕЙСА]: Гибкий контроль бюджета токенов
-    token_limit: Optional[int] = Field(default=50000, description="Лимит токенов на генерацию")
 
     # [БЕЗОПАСНОСТЬ]: Санитайзер ввода (Защита от Prompt Injection и разрыва JSON)
     @field_validator('topic', 'constraints')
@@ -47,8 +44,11 @@ class GenerateRequest(BaseModel):
     def sanitize_input(cls, v: str) -> str:
         if not v:
             return v
+        # 1. Экранируем кавычки
         v = v.replace('"', '\\"')
+        # 2. Удаляем XML-теги
         v = re.sub(r'<[^>]+>', '', v)
+        # 3. Блокируем инъекции
         injection_patterns = [
             r'(?i)ignore previous instructions', r'(?i)забудь все инструкции',
             r'(?i)system prompt', r'(?i)выведи текст', r'(?i)сломай json', r'(?i)ignore the above'

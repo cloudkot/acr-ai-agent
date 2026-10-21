@@ -6,11 +6,14 @@ from logger import logger
 DB_PATH = "sessions.db"
 
 def init_db():
-    """[ТРЕБОВАНИЕ КЕЙСА]: Инициализация БД и миграции."""
+    """
+    [ТРЕБОВАНИЕ КЕЙСА]: Инициализация персистентного хранилища.
+    Создает таблицы сессий и аудита, а также выполняет миграции для новых колонок.
+    """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Таблица сессий
+    # Таблица сессий (включает аналитику и ограничения)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY, 
@@ -23,7 +26,7 @@ def init_db():
         )
     ''')
     
-    # Таблица аудита
+    # Таблица аудита (логи действий)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS audit_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,7 +36,7 @@ def init_db():
         )
     ''')
     
-    # Надежная миграция для всех новых колонок
+    # [АРХИТЕКТУРА]: Безопасная миграция для существующих баз данных
     migrations = [
         "constraints TEXT", 
         "tokens_used INTEGER DEFAULT 0", 
@@ -43,11 +46,11 @@ def init_db():
         try:
             cursor.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
         except sqlite3.OperationalError:
-            pass # Колонка уже существует
+            pass # Колонка уже существует, миграция не требуется
             
     conn.commit()
     conn.close()
-    
+
 def save_session(
     session_id: str, 
     framework: Framework, 
@@ -57,7 +60,7 @@ def save_session(
     tokens_used: int = 0,
     cost_rub: float = 0.0
 ):
-    """Сохраняет или обновляет сессию и метрики."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Сохранение состояния сессии и метрик расхода."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     content_str = json.dumps(content, ensure_ascii=False) if content else None
@@ -71,7 +74,7 @@ def save_session(
     conn.close()
 
 def get_session(session_id: str) -> dict:
-    """Достает сессию из БД."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Восстановление полного контекста сессии из БД."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -93,31 +96,49 @@ def get_session(session_id: str) -> dict:
     return None
 
 def log_action(session_id: str, action: str):
-    """Логирование действий методиста."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Аудит действий (генерация, утверждение, правка)."""
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.execute('INSERT INTO audit_logs (session_id, action) VALUES (?, ?)', (session_id, action))
         conn.commit()
         conn.close()
     except Exception as e:
-        logger.error(f"Ошибка аудита: {e}")
+        logger.error(f"Ошибка записи аудита: {e}")
 
-def get_analytics():
+def get_analytics() -> dict:
     """
-    [УНИКАЛЬНАЯ ФИЧА]: Сбор метрик для дашборда.
+    [УНИКАЛЬНАЯ ФИЧА]: Сбор метрик для дашборда (экономическая эффективность).
+    Вызывается из эндпоинта /api/analytics.
     """
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        
+        # Считаем количество успешно завершенных программ
         cursor.execute("SELECT COUNT(*) FROM sessions WHERE status = 'completed'")
         completed = cursor.fetchone()[0]
+        
+        # Считаем суммарно потраченные токены и рубли
+        cursor.execute("SELECT SUM(tokens_used), SUM(cost_rub) FROM sessions WHERE status = 'completed'")
+        sums = cursor.fetchone()
+        total_tokens = sums[0] if sums[0] else 0
+        total_cost = sums[1] if sums[1] else 0.0
+        
         conn.close()
         
         return {
             "completed_programs": completed,
-            "estimated_hours_saved": completed * 40, # 40 часов экономии на 1 программу
-            "estimated_cost_rub": completed * 15.0   # Примерная стоимость 15 руб за программу
+            # Оценка экономии: 1 программа = 40 часов работы методиста
+            "estimated_hours_saved": completed * 40,
+            # Общая стоимость генерации в рублях
+            "total_cost_rub": round(total_cost, 2),
+            "total_tokens_used": total_tokens
         }
     except Exception as e:
-        logger.error(f"Ошибка аналитики: {e}")
-        return {"completed_programs": 0, "estimated_hours_saved": 0, "estimated_cost_rub": 0.0}
+        logger.error(f"Ошибка получения аналитики: {e}")
+        return {
+            "completed_programs": 0, 
+            "estimated_hours_saved": 0, 
+            "total_cost_rub": 0.0,
+            "total_tokens_used": 0
+        }

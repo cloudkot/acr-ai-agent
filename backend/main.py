@@ -1,21 +1,25 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Query
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel
 import os
 from urllib.parse import urlparse
 
-# Импорты наших модулей
+# Импорты модулей
 from agents.orchestrator import process_request, approve_and_generate, revise_session, clarify_and_classify
 from state_store import get_session, init_db, get_analytics
-from export import export_to_docx, export_to_pptx, export_tests_to_lms, export_to_json, export_tests_to_moodle_xml
+from export import (
+    export_to_docx, export_to_pptx, export_tests_to_lms, 
+    export_to_json, export_tests_to_moodle_xml
+)
 from services.reference_parser import save_and_parse_reference
 from agents.validator import run_full_validation, validate_coverage_with_content, check_content_constraints
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from schemas import GenerateRequest, RevisionRequest
-from fastapi.exceptions import RequestValidationError
 from cloud import LLMServiceError
+from logger import logger
 
 app = FastAPI(title="ACR AI Agent", version="1.0.0")
 
@@ -32,21 +36,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Единый формат ошибок для всех эндпоинтов."""
-    logger.error(f"Необработанная ошибка на {request.url.path}: {exc}")
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "status": "error",
-            "error_code": "INTERNAL_SERVER_ERROR",
-            "message": "Внутренняя ошибка сервера. Обратитесь к администратору.",
-            "details": str(exc)
-        }
-    )
+# [ТРЕБОВАНИЕ КЕЙСА]: Security Headers
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    return response
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Единый формат для ошибок валидации Pydantic
+# ==========================================
+# ЕДИНЫЙ ФОРМАТ ОШИБОК
+# ==========================================
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
@@ -59,7 +61,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         }
     )
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Единый формат для HTTP-ошибок (404, 400 и т.д.)
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(
@@ -71,16 +72,6 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         }
     )
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Security Headers
-@app.middleware("http")
-async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
-    return response
-
-# [ТРЕБОВАНИЕ КЕЙСА]: Обработка ошибок LLM
 @app.exception_handler(LLMServiceError)
 async def llm_exception_handler(request: Request, exc: LLMServiceError):
     return JSONResponse(
@@ -92,7 +83,20 @@ async def llm_exception_handler(request: Request, exc: LLMServiceError):
         }
     )
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Валидация URL моделей при старте
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Критическая ошибка на {request.url.path}: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "error_code": "INTERNAL_SERVER_ERROR",
+            "message": "Внутренняя ошибка сервера.",
+            "details": str(exc)
+        }
+    )
+
+# [ТРЕБОВАНИЕ КЕЙСА]: Инициализация и валидация URL
 @app.on_event("startup")
 def startup_event():
     init_db()
@@ -115,7 +119,7 @@ class ClarifyRequest(BaseModel):
 
 @app.post("/api/clarify")
 def clarify_endpoint(req: ClarifyRequest):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автовыбор шаблона до генерации."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автовыбор шаблона."""
     return clarify_and_classify(req.topic, req.hours)
 
 @app.get("/api/analytics")
@@ -127,25 +131,24 @@ def analytics_endpoint():
 
 @app.post("/api/generate")
 def generate_framework_endpoint(req: GenerateRequest):
-    """Шаг 1: Прием запроса, референсов, ограничений и лимита токенов."""
+    """Шаг 1: Прием запроса и генерация каркаса."""
     return process_request(
         topic=req.topic, 
         hours=req.hours, 
         template_type=req.template_type, 
         reference_text=req.reference_text,
-        constraints=req.constraints,
-        token_limit=req.token_limit
+        constraints=req.constraints
     )
 
 @app.post("/api/revise/{session_id}")
-def revise_endpoint(session_id: str, req: RevisionRequest, token_limit: int = Query(default=50000)):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка с учетом лимита."""
-    return revise_session(session_id, req.instruction, token_limit)
+def revise_endpoint(session_id: str, req: RevisionRequest):
+    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка."""
+    return revise_session(session_id, req.instruction)
 
 @app.post("/api/approve/{session_id}")
-def approve_endpoint(session_id: str, token_limit: int = Query(default=50000)):
-    """Шаг 2: Human-in-the-loop. Генерация контента с учетом лимита."""
-    return approve_and_generate(session_id, token_limit)
+async def approve_endpoint(session_id: str):
+    """Шаг 2: Human-in-the-loop. Асинхронная параллельная генерация."""
+    return await approve_and_generate(session_id)
 
 @app.get("/api/report/{session_id}")
 def get_validation_report(session_id: str):
@@ -208,7 +211,6 @@ def export_lms_endpoint(session_id: str):
 
 @app.get("/api/export-moodle/{session_id}")
 def export_moodle_endpoint(session_id: str):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Экспорт в Moodle XML (сверх плана)."""
     session = get_session(session_id)
     if not session or session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Контент не сгенерирован")

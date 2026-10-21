@@ -10,8 +10,7 @@ def generate_framework_json(
     hours: int, 
     template_type: str = "ДПО", 
     reference_text: str = None, 
-    constraints: str = None,
-    token_limit: int = 50000
+    constraints: str = None
 ) -> tuple[Framework, int, float]:
     """
     [АРХИТЕКТУРА]: Curriculum Architect.
@@ -47,22 +46,23 @@ def generate_framework_json(
        Запрещено упоминать ChatGPT, Midjourney.
     6. [ДОМЕННОЕ ПРАВИЛО 2]: Если тема про анализ данных, не копируй текст из reference дословно.
     7. [ПРАВИЛО СЛАЙДОВ]: Если в constraints просят "слайды для первых двух занятий", это означает, что нужно сделать слайды для ПЕРВЫХ ДВУХ МОДУЛЕЙ.
-    8. Верни ТОЛЬКО сырой JSON. Никаких markdown-тегов, без ```json.
-    9. В каждой компетенции ОБЯЗАТЕЛЬНО добавь поле "related_topics" (массив строк). 
-       Туда нужно вписать названия модулей (тем) из твоего учебного плана, в которых эта компетенция формируется.
+    8. [СВЯЗЬ С ТЕМАМИ]: В каждой компетенции ОБЯЗАТЕЛЬНО добавь поле "related_topics" (массив строк). Туда нужно вписать названия модулей из твоего учебного плана, в которых эта компетенция формируется.
+    9. Верни ТОЛЬКО сырой JSON. Никаких markdown-тегов, без ```json.
     </rules>
     
     <few_shot_example>
     {{
       "goal": "Программа на основе 273-ФЗ",
       "template_type": "ДПО",
-      "prof_standard": null,
+      "prof_standard": "Профстандарт 06.001",
       "final_assessment_hours": 2,
       "modules": [
         {{"title": "Введение", "total_hours": 34, "lectures": 10, "practice": 10, "labs": 0, "srs": 14}}
       ],
       "total_hours": 36,
-      "competencies": [{{"name": "Python", "knowledge": ["Синтаксис"], "skills": ["Писать код"]}}]
+      "competencies": [
+        {{"name": "Python", "knowledge": ["Синтаксис"], "skills": ["Писать код"], "related_topics": ["Введение"]}}
+      ]
     }}
     </few_shot_example>
     
@@ -74,9 +74,8 @@ def generate_framework_json(
     
     for attempt in range(3):
         try:
-            # Распаковываем ответ LLM (текст, токены, стоимость)
             response_text, tokens, cost = ask_llm(
-                prompt, task_type="framework", is_json=True, token_limit=token_limit
+                prompt, task_type="framework", is_json=True
             )
             total_tokens += tokens
             total_cost += cost
@@ -107,8 +106,7 @@ def generate_framework_json(
 
 def revise_framework_json(
     current_framework: Framework, 
-    instruction: str, 
-    token_limit: int = 50000
+    instruction: str
 ) -> tuple[Framework, int, float]:
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка каркаса.
@@ -126,7 +124,7 @@ def revise_framework_json(
     """
     
     response_text, tokens, cost = ask_llm(
-        prompt, task_type="revision", is_json=True, token_limit=token_limit
+        prompt, task_type="revision", is_json=True
     )
     
     data = extract_json_from_text(response_text)
