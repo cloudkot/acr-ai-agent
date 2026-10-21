@@ -8,13 +8,12 @@ from utils.json_parser import extract_json_from_text
 from logger import logger
 
 async def _generate_async_retry(prompt: str, task_type: str = "content", retries: int = 3) -> tuple[any, int, float]:
-    """[ТРЕБОВАНИЕ КЕЙСА]: Асинхронная обертка с ретраями для параллельной генерации."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Асинхронная обертка с ретраями."""
     total_tokens = 0
     total_cost = 0.0
     
     for attempt in range(retries):
         try:
-            # Запускаем синхронный ask_llm в отдельном потоке, чтобы не блокировать event loop
             raw, tokens, cost = await asyncio.to_thread(ask_llm, prompt, task_type, True)
             total_tokens += tokens
             total_cost += cost
@@ -31,8 +30,8 @@ async def _generate_async_retry(prompt: str, task_type: str = "content", retries
 
 async def generate_content_pack(framework: Framework, constraints: str = None) -> dict:
     """
-    [АРХИТЕКТУРА]: Параллельная генерация контента (Multi-Agent Pattern).
-    Все 6 артефактов генерируются одновременно, чтобы не упираться в лимиты контекста.
+    [АРХИТЕКТУРА]: Параллельная генерация контента.
+    Все результаты жестко приводятся к спискам словарей.
     """
     compact_data = {
         "template_type": framework.template_type,
@@ -47,13 +46,12 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     total_hours = framework.total_hours
     num_modules = len(framework.modules)
     
-    # Масштабирование количества вопросов
     target_q = max(10, total_hours // 24)
     if constraints:
         match = re.search(r'(\d+)\s*(вопрос|тест|задани)', constraints.lower())
         if match: target_q = int(match.group(1))
 
-    # --- ОПРЕДЕЛЯЕМ АСИНХРОННЫЕ ЗАДАЧИ ---
+    # --- ЗАДАЧИ ---
     
     async def task_tests():
         prompt = f"""
@@ -63,9 +61,10 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         <format>[{{"question":"...", "options":["1","2","3","4"], "correct_answer":"1", "related_competency":"..."}}]</format>
         """
         data, t, c = await _generate_async_retry(prompt, "content")
+        # Жесткая валидация
         if isinstance(data, dict): data = data.get("questions", [data])
         if not isinstance(data, list): data = []
-        return data[:target_q], t, c
+        return [x for x in data if isinstance(x, dict)][:target_q], t, c
 
     async def task_seminars():
         prompt = f"""
@@ -74,7 +73,11 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown.</rules>
         <format>[{{"module_title":"...", "task":"...", "criteria":"...", "related_competency":"..."}}]</format>
         """
-        return await _generate_async_retry(prompt, "content")
+        data, t, c = await _generate_async_retry(prompt, "content")
+        # Жесткая валидация (фикс ошибки str)
+        if isinstance(data, dict): data = data.get("seminars", [data])
+        if not isinstance(data, list): data = []
+        return [x for x in data if isinstance(x, dict)], t, c
 
     async def task_lectures():
         prompt = f"""
@@ -86,7 +89,7 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         data, t, c = await _generate_async_retry(prompt, "content")
         if isinstance(data, dict): data = data.get("modules_plan", [])
         if not isinstance(data, list): data = []
-        return data, t, c
+        return [x for x in data if isinstance(x, dict)], t, c
 
     async def task_slides():
         prompt = f"""
@@ -96,8 +99,9 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         <format>[{{"slide_title":"...", "module_title":"...", "bullets":["1","2"]}}]</format>
         """
         data, t, c = await _generate_async_retry(prompt, "content")
+        if isinstance(data, dict): data = data.get("slides", [])
         if not isinstance(data, list): data = []
-        return data, t, c
+        return [x for x in data if isinstance(x, dict)], t, c
 
     async def task_work_programs():
         prompt = f"""
@@ -109,30 +113,26 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         data, t, c = await _generate_async_retry(prompt, "content")
         if isinstance(data, dict): data = data.get("work_programs", [])
         if not isinstance(data, list): data = []
-        return data, t, c
+        return [x for x in data if isinstance(x, dict)], t, c
 
     async def task_bibliography():
         prompt = f"""
         <role>Библиотекарь.</role><context>{compact_json}</context>{constraints_context}
-        <task>Список 5-7 книг. Если не уверен, пиши '[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]'.</task>
+        <task>Список 5-7 книг.</task>
         <rules>Верни ТОЛЬКО JSON-массив строк. Никакого markdown.</rules>
         <format>["Автор. Название. Год."]</format>
         """
         data, t, c = await _generate_async_retry(prompt, "content")
         if isinstance(data, dict): data = data.get("bibliography", [])
         if not isinstance(data, list): data = []
-        return data, t, c
+        return [str(x) for x in data if isinstance(x, str)], t, c
 
-    # --- ЗАПУСКАЕМ ВСЁ ПАРАЛЛЕЛЬНО ---
-    logger.info(f"Запуск параллельной генерации контента (6 задач) для программы на {total_hours} ч...")
+    # --- ЗАПУСК ---
+    logger.info(f"Параллельная генерация контента для программы на {total_hours} ч...")
     
     results = await asyncio.gather(
-        task_tests(),
-        task_seminars(),
-        task_lectures(),
-        task_slides(),
-        task_work_programs(),
-        task_bibliography(),
+        task_tests(), task_seminars(), task_lectures(),
+        task_slides(), task_work_programs(), task_bibliography(),
         return_exceptions=True
     )
 
@@ -164,7 +164,7 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
                 if not s.get("criteria") or s.get("criteria") == "None" or s.get("criteria") == "Nope":
                     s["criteria"] = "Оценка выполнения задания"
 
-    # Фильтрация слайдов под жесткие ограничения
+    # Фильтрация слайдов
     if constraints:
         cons_lower = constraints.lower()
         if "первые два" in cons_lower or "первых двух" in cons_lower:
