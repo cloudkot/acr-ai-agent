@@ -6,9 +6,7 @@ from logger import logger
 DB_PATH = "sessions.db"
 
 def init_db():
-    """
-    [ТРЕБОВАНИЕ КЕЙСА]: Персистентное хранилище сессий, аудита и аналитики.
-    """
+    """[ТРЕБОВАНИЕ КЕЙСА]: Инициализация БД и миграции."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -35,16 +33,21 @@ def init_db():
         )
     ''')
     
-    # Миграция для существующих баз
-    try:
-        cursor.execute("ALTER TABLE sessions ADD COLUMN tokens_used INTEGER DEFAULT 0")
-        cursor.execute("ALTER TABLE sessions ADD COLUMN cost_rub REAL DEFAULT 0.0")
-    except sqlite3.OperationalError:
-        pass
-        
+    # Надежная миграция для всех новых колонок
+    migrations = [
+        "constraints TEXT", 
+        "tokens_used INTEGER DEFAULT 0", 
+        "cost_rub REAL DEFAULT 0.0"
+    ]
+    for col in migrations:
+        try:
+            cursor.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass # Колонка уже существует
+            
     conn.commit()
     conn.close()
-
+    
 def save_session(
     session_id: str, 
     framework: Framework, 
