@@ -7,12 +7,11 @@ from utils.json_parser import extract_json_from_text
 from logger import logger
 
 async def _generate_async_retry(prompt: str, task_type: str = "content", retries: int = 3) -> tuple[any, int, float]:
-    """[ТРЕБОВАНИЕ КЕЙСА]: Асинхронная обертка с ретраями (без to_thread)."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Асинхронная обертка с ретраями."""
     total_tokens = 0
     total_cost = 0.0
     for attempt in range(retries):
         try:
-            # [АРХИТЕКТУРА]: Прямой вызов асинхронного ask_llm
             raw, tokens, cost = await ask_llm(prompt, task_type, True)
             total_tokens += tokens
             total_cost += cost
@@ -24,32 +23,31 @@ async def _generate_async_retry(prompt: str, task_type: str = "content", retries
             if attempt == retries - 1: raise RuntimeError(f"Сбой после {retries} попыток: {e}")
             await asyncio.sleep(1.5)
 
-def _generate_fallback_seminar(module_title: str, module_hours: int) -> dict:
-    """[ML-СКЛЕЙКА]: Алгоритмический fallback для семинара, если LLM не справилась."""
+def _generate_smart_fallback_seminar(framework: Framework, module_title: str, module_hours: int) -> dict:
+    """
+    [ML-СКЛЕЙКА]: Умный fallback. Не просто шаблон, а алгоритмический поиск 
+    компетенций, привязанных к этому модулю через related_topics.
+    """
+    related_comps = []
+    for comp in framework.competencies:
+        # Проверяем, есть ли этот модуль в списке тем компетенции
+        if any(module_title.lower() in topic.lower() or topic.lower() in module_title.lower() for topic in comp.related_topics):
+            related_comps.append(comp.name)
+            
+    if related_comps:
+        comp_str = ", ".join(related_comps)
+        task_text = f"Практическое задание по модулю '{module_title}' ({module_hours} ч.): разработать решение, демонстрирующее владение следующими компетенциями: {comp_str}. Провести защиту и обосновать архитектурные решения."
+        competency_target = related_comps[0]
+    else:
+        task_text = f"Практическое задание по модулю '{module_title}' ({module_hours} ч.): реализовать сквозной сценарий применения изученных инструментов и методологий в рамках данного модуля."
+        competency_target = "Разработка и защита проектных решений"
+
     return {
         "module_title": module_title,
-        "task": f"Практическое задание по модулю '{module_title}' ({module_hours} ч.): разработать и продемонстрировать сквозной сценарий применения изученных технологий.",
-        "criteria": "Критерии оценки: 1) Полнота решения; 2) Корректность применения инструментов; 3) Защита решения перед комиссией.",
-        "related_competency": "Разработка и защита проектных решений"
+        "task": task_text,
+        "criteria": "Критерии оценки: 1) Корректность применения инструментов; 2) Полнота реализации; 3) Качество защиты решения.",
+        "related_competency": competency_target
     }
-
-def _validate_and_glue_seminars(framework: Framework, generated_seminars: list) -> list:
-    """
-    [ML-СКЛЕЙКА]: Проверяет, что для КАЖДОГО модуля есть семинар.
-    Если LLM пропустила модуль или вернула None, генерирует алгоритмический fallback.
-    """
-    final_seminars = []
-    for mod in framework.modules:
-        # Ищем семинар, сгенерированный LLM для этого модуля
-        found = next((s for s in generated_seminars if mod.title.lower() in s.get("module_title", "").lower()), None)
-        
-        if found and found.get("task") and found.get("task") != "None":
-            final_seminars.append(found)
-        else:
-            logger.info(f"[ML-СКЛЕЙКА] Сгенерирован fallback для семинара модуля: {mod.title}")
-            final_seminars.append(_generate_fallback_seminar(mod.title, mod.total_hours))
-            
-    return final_seminars
 
 async def generate_content_pack(framework: Framework, constraints: str = None) -> dict:
     """[АРХИТЕКТУРА]: Истинно параллельная генерация контента с батчингом."""
@@ -66,15 +64,12 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     total_hours = framework.total_hours
     num_modules = len(framework.modules)
     
-    # Батчинг для семинаров
     batch_size = 3
     target_q = max(10, total_hours // 24)
     if constraints:
         match = re.search(r'(\d+)\s*(вопрос|тест|задани)', constraints.lower())
         if match: target_q = int(match.group(1))
 
-    # --- ЗАДАЧИ ---
-    
     async def task_tests():
         prompt = f"""
         <role>Тестолог.</role><context>{compact_json}</context>{constraints_context}
@@ -88,7 +83,6 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         return [x for x in data if isinstance(x, dict)][:target_q], t, c
 
     async def task_seminars():
-        # Батчинг для больших программ
         all_seminars = []
         total_t = 0
         total_c = 0.0
@@ -114,8 +108,17 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
             except Exception as e:
                 logger.error(f"Ошибка при генерации батча семинаров: {e}")
                 
-        # Применяем ML-склейку
-        final_seminars = _validate_and_glue_seminars(framework, all_seminars)
+        # ML-Склейка с использованием умного fallback
+        final_seminars = []
+        for mod in framework.modules:
+            found = next((s for s in all_seminars if mod.title.lower() in s.get("module_title", "").lower()), None)
+            
+            if found and found.get("task") and found.get("task") != "None":
+                final_seminars.append(found)
+            else:
+                logger.info(f"[ML-СКЛЕЙКА] Вызов умного fallback для модуля: {mod.title}")
+                final_seminars.append(_generate_smart_fallback_seminar(framework, mod.title, mod.total_hours))
+                
         return final_seminars, total_t, total_c
 
     async def task_lectures():
@@ -166,7 +169,7 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         if not isinstance(data, list): data = []
         return [str(x) for x in data if isinstance(x, str)], t, c
 
-    # [АРХИТЕКТУРА]: Одновременный запуск всех 6 асинхронных задач
+    # [АРХИТЕКТУРА]: Одновременный запуск всех 6 задач
     logger.info(f"Запуск параллельных HTTP-запросов (6 задач) для {total_hours} ч...")
     
     results = await asyncio.gather(
