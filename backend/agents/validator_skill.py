@@ -11,11 +11,18 @@ from logger import logger
 class ValidationSkill(BaseAgent):
     """
     [ФИКС РЕВЬЮЕРА]: Валидация вынесена в отдельный навык (Skill).
-    Теперь оркестратор не вызывает бизнес-логику напрямую.
     """
     def __init__(self):
         super().__init__("Validation Agent", "Проверяет математику часов, ограничения и покрытие компетенций.")
-        
+
+    async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Базовый метод, требуемый интерфейсом BaseAgent.
+        Поскольку валидация вызывается по-разному (для каркаса и для контента),
+        мы оставляем этот метод как заглушку, возвращающую контекст.
+        """
+        return context
+
     async def execute_framework_validation(self, context: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Выполнение навыка: Валидация каркаса")
         fw = context["framework"]
