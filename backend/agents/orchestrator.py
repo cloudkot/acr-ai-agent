@@ -89,7 +89,7 @@ class AgentOrchestrator:
         # 1. Генерация каркаса
         context = await self.skills["curriculum"].execute(context)
         
-        # 2. Валидация (автокоррекция часов и проверка математики)
+        # 2. Валидация через навык (без прямых вызовов функций валидатора)
         context = await self.skills["validation"].execute_framework_validation(context)
         
         # 3. Сохранение состояния
@@ -124,7 +124,7 @@ class AgentOrchestrator:
         # 1. Генерация контента
         context = await self.skills["content"].execute(context)
         
-        # 2. Валидация контента (фильтрация слайдов, проверка количества вопросов)
+        # 2. Валидация контента через навык
         context = await self.skills["validation"].execute_content_validation(context)
         
         # 3. Сохранение результата

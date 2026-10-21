@@ -126,7 +126,6 @@ async def clarify_endpoint(req: ClarifyRequest):
 @app.get("/api/analytics")
 async def analytics_endpoint():
     """[УНИКАЛЬНАЯ ФИЧА]: Глобальная аналитика для дашборда."""
-    # [ФИКС АРХИТЕКТУРЫ]: get_analytics теперь асинхронная
     return await get_analytics()
 
 # --- ОСНОВНОЙ СЦЕНАРИЙ ---

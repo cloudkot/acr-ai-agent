@@ -4,13 +4,15 @@ import asyncio
 from cloud import ask_llm, MODEL_FAST
 from schemas import Framework
 from utils.json_parser import extract_json_from_text
+from config import config
 from logger import logger
 
-# [ФИКС РЕВЬЮЕРА]: Увеличили семафор до 5 для ускорения на 500 часах
-MAX_CONCURRENT_REQUESTS = 5
+# [ФИКС РЕВЬЮЕРА]: Используем конфигурацию вместо хардкода
+MAX_CONCURRENT_REQUESTS = config.MAX_CONCURRENT_REQUESTS
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 async def _generate_async_retry(prompt: str, fallback_prompt: str = None, task_type: str = "content", retries: int = 3) -> tuple[any, int, float]:
+    """[ТРЕБОВАНИЕ КЕЙСА]: Асинхронная обертка с ретраями и LLM-fallback."""
     total_tokens = 0
     total_cost = 0.0
     async with semaphore:
@@ -25,7 +27,7 @@ async def _generate_async_retry(prompt: str, fallback_prompt: str = None, task_t
             except Exception as e:
                 logger.warning(f"Ошибка генерации ({attempt+1}/{retries}): {e}")
                 if attempt == retries - 1: 
-                    # [ФИКС РЕВЬЮЕРА]: ML-склейка. Если основной промпт упал, делаем упрощенный запрос к быстрой модели.
+                    # Уровень 1: LLM-Fallback (упрощенный запрос при сбое основного)
                     if fallback_prompt:
                         logger.info("Запуск LLM-fallback (упрощенный запрос)...")
                         try:
@@ -40,13 +42,13 @@ async def _generate_async_retry(prompt: str, fallback_prompt: str = None, task_t
                     raise RuntimeError(f"Сбой после {retries} попыток: {e}")
                 await asyncio.sleep(2)
 
-# Заглушки (оставляем как есть)
-def _fallback_seminar(framework: Framework, mod_title: str, mod_hours: int) -> dict:
+# Уровень 2: Rule-based Fallback (если LLM упала полностью)
+def _rule_based_fallback_seminar(framework: Framework, mod_title: str, mod_hours: int) -> dict:
     comps = [c.name for c in framework.competencies if any(mod_title.lower() in t.lower() for t in c.related_topics)]
     task = f"Разработать практический кейс по модулю '{mod_title}' ({mod_hours} ч.). Отработать навыки: {', '.join(comps) if comps else 'основные инструменты'}."
     return {"module_title": mod_title, "task": task, "criteria": "Критерии: 1) Работоспособность; 2) Соответствие ТЗ; 3) Защита.", "related_competency": comps[0] if comps else "Общая"}
 
-def _fallback_lecture(framework: Framework, mod_title: str) -> dict:
+def _rule_based_fallback_lecture(framework: Framework, mod_title: str) -> dict:
     title_clean = mod_title.replace("Модуль", "").strip()
     theses = [
         f"Архитектура и основные концепции: {title_clean}",
@@ -56,23 +58,15 @@ def _fallback_lecture(framework: Framework, mod_title: str) -> dict:
     ]
     return {"module_title": mod_title, "theses": theses}
 
-def _fallback_test(framework: Framework, index: int, mod_title: str) -> dict:
-    return {
-        "question": f"Какой основной подход используется при работе с {mod_title}?",
-        "options": [f"Применение инструментов {mod_title}", "Ручное конфигурирование", "Отказ от автоматизации", "Использование устаревших методов"],
-        "correct_answer": f"Применение инструментов {mod_title}",
-        "related_competency": framework.competencies[0].name if framework.competencies else "Общая"
-    }
+def _rule_based_fallback_test(framework: Framework, index: int, mod_title: str) -> dict:
+    return {"question": f"Какой основной подход используется при работе с {mod_title}?", "options": [f"Применение инструментов {mod_title}", "Ручное конфигурирование", "Отказ от автоматизации", "Использование устаревших методов"], "correct_answer": f"Применение инструментов {mod_title}", "related_competency": framework.competencies[0].name if framework.competencies else "Общая"}
 
-def _fallback_bibliography(framework: Framework) -> list:
+def _rule_based_fallback_bibliography(framework: Framework) -> list:
     topics = ", ".join([m.title for m in framework.modules[:2]])
-    return [
-        f"Практическое руководство по {topics}. 2024.",
-        f"Сборник лучших практик: {framework.prof_standard or 'Современные IT-решения'}. 2023.",
-        f"Архитектура и паттерны проектирования. 2025."
-    ]
+    return [f"Практическое руководство по {topics}. 2024.", f"Сборник лучших практик. 2023.", f"Архитектура и паттерны проектирования. 2025."]
 
 async def generate_content_pack(framework: Framework, constraints: str = None) -> dict:
+    """[АРХИТЕКТУРА]: Гранулярная параллельная генерация контента."""
     compact_data = {
         "template_type": framework.template_type, "prof_standard": framework.prof_standard,
         "total_hours": framework.total_hours, "competencies": [c.name for c in framework.competencies]
@@ -81,7 +75,8 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""
 
     total_hours = framework.total_hours
-    target_q = max(10, total_hours // 15)
+    # [ФИКС РЕВЬЮЕРА]: Формула вынесена в конфиг
+    target_q = max(config.MIN_QUESTIONS, total_hours // config.QUESTIONS_PER_HOURS)
     if constraints:
         match = re.search(r'(\d+)\s*(вопрос|тест|задани)', constraints.lower())
         if match: target_q = int(match.group(1))
@@ -100,7 +95,6 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown.</rules>
         <format>[{{"question":"...", "options":["1","2","3","4"], "correct_answer":"1", "related_competency":"..."}}]</format>
         """
-        # Упрощенный fallback-промпт
         fallback_prompt = f"Составь {batch_size} тестовых вопроса по теме {framework.goal[:50]}. Формат JSON: [{{'question':'...', 'options':['1','2','3','4'], 'correct_answer':'1', 'related_competency':'...'}}]"
         try:
             data, t, c = await _generate_async_retry(prompt, fallback_prompt, "content")
@@ -190,7 +184,6 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
             return []
         except Exception: return []
 
-    # Формируем задачи
     test_tasks = []
     questions_left = target_q
     part = 1
@@ -205,9 +198,10 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     wp_tasks = [fetch_single_work_program(mod.title) for mod in framework.modules]
     
     slide_tasks = []
-    if constraints and ("pandas" in constraints.lower()):
-        slide_tasks = [fetch_single_slides(mod.title) for mod in framework.modules if "pandas" in mod.title.lower()]
-    elif constraints and ("первые два" in constraints.lower()):
+    # [ФИКС РЕВЬЮЕРА]: Используем ключевые слова из конфига
+    if constraints and (config.SLIDES_RESTRICTION_KEYWORD in constraints.lower()):
+        slide_tasks = [fetch_single_slides(mod.title) for mod in framework.modules if config.SLIDES_RESTRICTION_KEYWORD in mod.title.lower()]
+    elif constraints and (config.FIRST_LESSONS_KEYWORD in constraints.lower()):
         slide_tasks = [fetch_single_slides(mod.title) for mod in framework.modules[:2]]
     else:
         slide_tasks = [fetch_single_slides(mod.title) for mod in framework.modules]
@@ -244,21 +238,21 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     bib_res = results[idx]
     if isinstance(bib_res, list): all_bibliography.extend(bib_res)
 
-    # --- СКЛЕЙКА ---
+    # --- СКЛЕЙКА (Rule-based fallback) ---
     final_tests = all_tests[:target_q]
     while len(final_tests) < target_q:
         mod_title = framework.modules[len(final_tests) % len(framework.modules)].title if framework.modules else "программе"
-        final_tests.append(_fallback_test(framework, len(final_tests) + 1, mod_title))
+        final_tests.append(_rule_based_fallback_test(framework, len(final_tests) + 1, mod_title))
 
     for mod in framework.modules:
         if not any(mod.title.lower() in l.get("module_title", "").lower() for l in final_lectures):
-            final_lectures.append(_fallback_lecture(framework, mod.title))
+            final_lectures.append(_rule_based_fallback_lecture(framework, mod.title))
             
         if not any(mod.title.lower() in s.get("module_title", "").lower() for s in final_seminars):
-            final_seminars.append(_fallback_seminar(framework, mod.title, mod.total_hours))
+            final_seminars.append(_rule_based_fallback_seminar(framework, mod.title, mod.total_hours))
 
     if not all_bibliography:
-        all_bibliography = _fallback_bibliography(framework)
+        all_bibliography = _rule_based_fallback_bibliography(framework)
 
     return {
         "tests": final_tests, "seminars": final_seminars, "lectures": final_lectures,
