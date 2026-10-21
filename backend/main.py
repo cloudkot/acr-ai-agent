@@ -98,8 +98,8 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # [ТРЕБОВАНИЕ КЕЙСА]: Инициализация БД и валидация URL при старте
 @app.on_event("startup")
-def startup_event():
-    init_db()
+async def startup_event():
+    await init_db()
     base_url = os.getenv("OPENAI_BASE_URL", "")
     if base_url:
         parsed = urlparse(base_url)
@@ -123,9 +123,9 @@ async def clarify_endpoint(req: ClarifyRequest):
     return await clarify_and_classify(req.topic, req.hours)
 
 @app.get("/api/analytics")
-def analytics_endpoint():
+async def analytics_endpoint():
     """[УНИКАЛЬНАЯ ФИЧА]: Глобальная аналитика для дашборда."""
-    return get_analytics()
+    return await get_analytics()
 
 # --- ОСНОВНОЙ СЦЕНАРИЙ ---
 
@@ -151,9 +151,9 @@ async def approve_endpoint(session_id: str):
     return await approve_and_generate(session_id)
 
 @app.get("/api/report/{session_id}")
-def get_validation_report(session_id: str):
+async def get_validation_report(session_id: str):
     """[ТРЕБОВАНИЕ КЕЙСА]: Расширенный отчет автопроверки."""
-    session = get_session(session_id)
+    session = await get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
     
@@ -178,54 +178,59 @@ async def upload_reference(file: UploadFile = File(...)):
         "full_text": text
     }
 
-# --- ЭКСПОРТ ФАЙЛОВ (Строго GET) ---
+# --- ЭКСПОРТ ФАЙЛОВ (Строго GET и Асинхронно) ---
 
 @app.get("/api/export-docx/{session_id}")
-def export_docx_endpoint(session_id: str):
-    session = get_session(session_id)
+async def export_docx_endpoint(session_id: str):
+    session = await get_session(session_id)
     if not session or session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Сессия не готова")
     c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
     filename = f"program_{session_id[:8]}.docx"
-    export_to_docx(session["framework"], session["content"], filename, constraints_check=c_check)
+    # [ФИКС]: Добавлен await
+    await export_to_docx(session["framework"], session["content"], filename, constraints_check=c_check)
     return FileResponse(filename, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename=filename)
 
 @app.get("/api/export-pptx/{session_id}")
-def export_pptx_endpoint(session_id: str):
-    session = get_session(session_id)
+async def export_pptx_endpoint(session_id: str):
+    session = await get_session(session_id)
     if not session or session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Контент не сгенерирован")
     c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
     filename = f"presentation_{session_id[:8]}.pptx"
-    export_to_pptx(session["framework"], session["content"], filename, constraints_check=c_check)
+    # [ФИКС]: Добавлен await
+    await export_to_pptx(session["framework"], session["content"], filename, constraints_check=c_check)
     return FileResponse(filename, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation", filename=filename)
 
 @app.get("/api/export-lms/{session_id}")
-def export_lms_endpoint(session_id: str):
-    session = get_session(session_id)
+async def export_lms_endpoint(session_id: str):
+    session = await get_session(session_id)
     if not session or session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Контент не сгенерирован")
     filename = f"tests_{session_id[:8]}.txt"
-    export_tests_to_lms(session["content"].get("tests", []), filename)
+    # [ФИКС]: Добавлен await
+    await export_tests_to_lms(session["content"].get("tests", []), filename)
     return FileResponse(filename, media_type="text/plain", filename=filename)
 
 @app.get("/api/export-moodle/{session_id}")
-def export_moodle_endpoint(session_id: str):
-    session = get_session(session_id)
+async def export_moodle_endpoint(session_id: str):
+    session = await get_session(session_id)
     if not session or session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Контент не сгенерирован")
     filename = f"moodle_{session_id[:8]}.xml"
-    export_tests_to_moodle_xml(session["content"].get("tests", []), filename)
+    # [ФИКС]: Добавлен await
+    await export_tests_to_moodle_xml(session["content"].get("tests", []), filename)
     return FileResponse(filename, media_type="application/xml", filename=filename)
 
 @app.get("/api/export-json/{session_id}")
-def export_json_endpoint(session_id: str):
-    session = get_session(session_id)
+async def export_json_endpoint(session_id: str):
+    session = await get_session(session_id)
     if not session or not session["content"]:
         raise HTTPException(status_code=400, detail="Контент не сгенерирован")
     c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
     filename = f"bundle_{session_id[:8]}.json"
-    export_to_json(session["framework"], session["content"], filename, constraints_check=c_check)
+    # [ФИКС]: Добавлен await
+    await export_to_json(session["framework"], session["content"], filename, constraints_check=c_check)
     return FileResponse(filename, media_type="application/json", filename=filename)
 
 # --- РАЗДАЧА ФРОНТЕНДА ---

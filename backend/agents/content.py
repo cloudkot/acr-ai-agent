@@ -30,34 +30,40 @@ def _fallback_seminar(framework: Framework, mod_title: str, mod_hours: int) -> d
     comps = [c.name for c in framework.competencies if any(mod_title.lower() in t.lower() for t in c.related_topics)]
     task = f"Практическое задание по модулю '{mod_title}' ({mod_hours} ч.): разработать решение на основе следующих компетенций: {', '.join(comps) if comps else 'изученных инструментов'}."
     return {
-        "module_title": mod_title,
-        "task": task,
-        "criteria": "Критерии оценки: 1) Корректность применения инструментов; 2) Полнота реализации; 3) Качество защиты.",
+        "module_title": mod_title, "task": task,
+        "criteria": "Критерии оценки: 1) Корректность; 2) Полнота; 3) Качество защиты.",
         "related_competency": comps[0] if comps else "Общая"
     }
 
 def _fallback_lecture(framework: Framework, mod_title: str) -> dict:
     comps = [c.name for c in framework.competencies if any(mod_title.lower() in t.lower() for t in c.related_topics)]
     theses = [f"Введение в {mod_title}", "Ключевые инструменты и методологии", "Практические аспекты применения"]
-    if comps:
-        theses.append(f"Развитие компетенций: {', '.join(comps)}")
+    if comps: theses.append(f"Развитие компетенций: {', '.join(comps)}")
     return {"module_title": mod_title, "theses": theses}
 
 def _fallback_test(framework: Framework, index: int) -> dict:
-    comp = framework.competencies[0].name if framework.competencies else "Общая"
+    """[УМНЫЙ FALLBACK]: Генерирует вопрос на основе названия компетенции."""
+    comp = framework.competencies[(index - 1) % len(framework.competencies)].name if framework.competencies else "Общая"
     return {
-        "question": f"Вопрос {index} по теме программы (автоматически сгенерирован на основе модуля).",
-        "options": ["Верный ответ", "Дистрактор 1", "Дистрактор 2", "Дистрактор 3"],
-        "correct_answer": "Верный ответ",
+        "question": f"Какие инструменты и методы относятся к компетенции '{comp}'?",
+        "options": [f"Инструменты, соответствующие {comp}", "Только ручное тестирование", "Устаревшие подходы", "Ничего из перечисленного"],
+        "correct_answer": f"Инструменты, соответствующие {comp}",
         "related_competency": comp
     }
 
+def _fallback_bibliography(framework: Framework) -> list:
+    """[УМНЫЙ FALLBACK]: Генерирует список литературы на основе тем."""
+    topics = ", ".join([m.title for m in framework.modules[:2]])
+    return [
+        f"Учебное пособие по направлению: {topics}. 2024.",
+        f"Практикум по {framework.competencies[0].name if framework.competencies else 'основам'}. 2023.",
+        f"Сборник статей: Современные подходы в {framework.goal[:30]}... 2025."
+    ]
+
 async def generate_content_pack(framework: Framework, constraints: str = None) -> dict:
     compact_data = {
-        "template_type": framework.template_type,
-        "prof_standard": framework.prof_standard,
-        "total_hours": framework.total_hours,
-        "competencies": [c.name for c in framework.competencies]
+        "template_type": framework.template_type, "prof_standard": framework.prof_standard,
+        "total_hours": framework.total_hours, "competencies": [c.name for c in framework.competencies]
     }
     base_json = json.dumps(compact_data, ensure_ascii=False, separators=(',', ':'))
     constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""
@@ -70,13 +76,11 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
 
     total_tokens = 0
     total_cost = 0.0
-
     def _accumulate(t, c):
         nonlocal total_tokens, total_cost
         total_tokens += t
         total_cost += c
 
-    # --- ТЕСТЫ ---
     async def fetch_tests_batch(batch_size: int, part_num: int):
         prompt = f"""
         <role>Тестолог.</role><context>{base_json}</context>{constraints_context}
@@ -88,14 +92,10 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
             data, t, c = await _generate_async_retry(prompt, "content")
             _accumulate(t, c)
             if isinstance(data, dict): data = data.get("questions", [data])
-            if isinstance(data, list): 
-                # Фильтруем None и пустые вопросы
-                return [x for x in data if isinstance(x, dict) and x.get("question") and x.get("question") != "None"]
+            if isinstance(data, list): return [x for x in data if isinstance(x, dict) and x.get("question") and x.get("question") != "None"]
             return []
-        except Exception:
-            return []
+        except Exception: return []
 
-    # --- ЛЕКЦИИ ---
     async def fetch_lectures_batch(batch):
         titles = [m.title for m in batch]
         prompt = f"""
@@ -108,13 +108,10 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
             data, t, c = await _generate_async_retry(prompt, "content")
             _accumulate(t, c)
             if isinstance(data, dict): data = data.get("modules_plan", [])
-            if isinstance(data, list):
-                return [x for x in data if isinstance(x, dict) and x.get("theses")]
+            if isinstance(data, list): return [x for x in data if isinstance(x, dict) and x.get("theses")]
             return []
-        except Exception:
-            return []
+        except Exception: return []
 
-    # --- СЕМИНАРЫ ---
     async def fetch_seminars_batch(batch):
         titles = [m.title for m in batch]
         prompt = f"""
@@ -127,13 +124,10 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
             data, t, c = await _generate_async_retry(prompt, "content")
             _accumulate(t, c)
             if isinstance(data, dict): data = data.get("seminars", [data])
-            if isinstance(data, list):
-                return [x for x in data if isinstance(x, dict) and x.get("task") and x.get("task") != "None"]
+            if isinstance(data, list): return [x for x in data if isinstance(x, dict) and x.get("task") and x.get("task") != "None"]
             return []
-        except Exception:
-            return []
+        except Exception: return []
 
-    # --- СЛАЙДЫ ---
     async def fetch_slides_batch(batch):
         titles = [m.title for m in batch]
         prompt = f"""
@@ -146,13 +140,10 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
             data, t, c = await _generate_async_retry(prompt, "content")
             _accumulate(t, c)
             if isinstance(data, dict): data = data.get("slides", [])
-            if isinstance(data, list):
-                return [x for x in data if isinstance(x, dict)]
+            if isinstance(data, list): return [x for x in data if isinstance(x, dict)]
             return []
-        except Exception:
-            return []
+        except Exception: return []
 
-    # --- РАБОЧИЕ ПРОГРАММЫ ---
     async def fetch_work_programs_batch(batch):
         titles = [m.title for m in batch]
         prompt = f"""
@@ -165,13 +156,10 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
             data, t, c = await _generate_async_retry(prompt, "content")
             _accumulate(t, c)
             if isinstance(data, dict): data = data.get("work_programs", [])
-            if isinstance(data, list):
-                return [x for x in data if isinstance(x, dict)]
+            if isinstance(data, list): return [x for x in data if isinstance(x, dict)]
             return []
-        except Exception:
-            return []
+        except Exception: return []
 
-    # --- БИБЛИОГРАФИЯ ---
     async def fetch_bibliography():
         prompt = f"""
         <role>Библиотекарь.</role><context>{base_json}</context>{constraints_context}
@@ -183,13 +171,10 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
             data, t, c = await _generate_async_retry(prompt, "content")
             _accumulate(t, c)
             if isinstance(data, dict): data = data.get("bibliography", [])
-            if isinstance(data, list):
-                return [str(x) for x in data if isinstance(x, str)]
+            if isinstance(data, list): return [str(x) for x in data if isinstance(x, str)]
             return []
-        except Exception:
-            return []
+        except Exception: return []
 
-    # Формируем батчи
     test_tasks = []
     questions_left = target_q
     part = 1
@@ -208,10 +193,8 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         module_tasks.append(fetch_work_programs_batch(batch))
 
     all_tasks = test_tasks + module_tasks + [fetch_bibliography()]
-    logger.info(f"Запуск {len(all_tasks)} гранулярных HTTP-запросов...")
     results = await asyncio.gather(*all_tasks, return_exceptions=True)
 
-    # Сборка
     all_tests, all_seminars, all_lectures = [], [], []
     all_slides, all_work_programs, all_bibliography = [], [], []
 
@@ -239,14 +222,16 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     while len(final_tests) < target_q:
         final_tests.append(_fallback_test(framework, len(final_tests) + 1))
 
-    final_seminars = []
-    final_lectures = []
+    final_seminars, final_lectures = [], []
     for mod in framework.modules:
         sem = next((s for s in all_seminars if mod.title.lower() in s.get("module_title", "").lower()), None)
         final_seminars.append(sem if sem else _fallback_seminar(framework, mod.title, mod.total_hours))
         
         lec = next((l for l in all_lectures if mod.title.lower() in l.get("module_title", "").lower()), None)
         final_lectures.append(lec if lec else _fallback_lecture(framework, mod.title))
+
+    if not all_bibliography:
+        all_bibliography = _fallback_bibliography(framework)
 
     if constraints:
         cons_lower = constraints.lower()
@@ -257,12 +242,7 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
             all_slides = [s for s in all_slides if "pandas" in s.get("module_title", "").lower() or "pandas" in s.get("slide_title", "").lower()]
 
     return {
-        "tests": final_tests,
-        "seminars": final_seminars,
-        "lectures": final_lectures,
-        "slides": all_slides,
-        "work_programs": all_work_programs,
-        "bibliography": all_bibliography,
-        "total_tokens": total_tokens,
-        "total_cost": total_cost
+        "tests": final_tests, "seminars": final_seminars, "lectures": final_lectures,
+        "slides": all_slides, "work_programs": all_work_programs, "bibliography": all_bibliography,
+        "total_tokens": total_tokens, "total_cost": total_cost
     }

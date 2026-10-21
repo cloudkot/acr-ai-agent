@@ -89,12 +89,12 @@ class AgentOrchestrator:
         context["framework"] = auto_correct_hours(context["framework"], context["hours"], context.get("constraints"))
         report = run_full_validation(context["framework"])
         
-        # 3. Сохранение состояния
-        save_session(
+        # 3. Сохранение состояния (асинхронно)
+        await save_session(
             context["session_id"], context["framework"], "waiting_for_approval", 
             constraints=context.get("constraints"), tokens_used=context["tokens"], cost_rub=context["cost"]
         )
-        log_action(context["session_id"], "generated")
+        await log_action(context["session_id"], "generated")
         
         return {
             "session_id": context["session_id"],
@@ -105,7 +105,8 @@ class AgentOrchestrator:
         }
 
     async def run_content_pipeline(self, session_id: str) -> Dict[str, Any]:
-        session = get_session(session_id)
+        # [ФИКС]: Асинхронное получение сессии
+        session = await get_session(session_id)
         if not session or session["status"] != "waiting_for_approval":
             return {"error": "Сессия не найдена или уже обработана"}
             
@@ -120,19 +121,17 @@ class AgentOrchestrator:
         # Генерация контента (гранулярная)
         context = await self.content_skill.execute(context)
         
-        # Принудительная валидация ограничений (например, слайды только для pandas)
+        # Принудительная валидация ограничений
         context["content"] = enforce_content_constraints(context["framework"], context["content"], context.get("constraints"))
-        
-        # Сбор ошибок (если LLM что-то упустила)
         constraints_report = check_content_constraints(context["framework"], context["content"], context.get("constraints"))
         
-        # Сохранение результата
-        save_session(
+        # Сохранение результата (асинхронно)
+        await save_session(
             session_id, context["framework"], "completed", 
             content=context["content"], constraints=context.get("constraints"),
             tokens_used=context["tokens"], cost_rub=context["cost"]
         )
-        log_action(session_id, "approved")
+        await log_action(session_id, "approved")
         
         return {
             "session_id": session_id, 
@@ -141,13 +140,13 @@ class AgentOrchestrator:
             "constraints_check": constraints_report,
             "analytics": {
                 "tokens_spent": context["tokens"], 
-                "cost_rub": round(context["cost"], 2), 
-                "hours_saved": 40.0
+                "cost_rub": round(context["cost"], 2)
             }
         }
 
     async def run_revision_pipeline(self, session_id: str, instruction: str) -> Dict[str, Any]:
-        session = get_session(session_id)
+        # [ФИКС]: Асинхронное получение сессии
+        session = await get_session(session_id)
         if not session:
             return {"error": "Сессия не найдена"}
             
@@ -161,12 +160,13 @@ class AgentOrchestrator:
         
         context = await self.revision_skill.execute(context)
         
-        save_session(
+        # [ФИКС]: Асинхронное сохранение
+        await save_session(
             session_id, context["framework"], "waiting_for_approval", 
             constraints=session.get("constraints"),
             tokens_used=context["tokens"], cost_rub=context["cost"]
         )
-        log_action(session_id, "revised")
+        await log_action(session_id, "revised")
         
         return {
             "session_id": session_id,

@@ -1,131 +1,107 @@
 import sqlite3
 import json
+import asyncio
 from schemas import Framework
 from logger import logger
 
 DB_PATH = "sessions.db"
 
-def init_db():
-    """[ТРЕБОВАНИЕ КЕЙСА]: Инициализация персистентного хранилища."""
+def _init_db_sync():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY, 
-            framework_json TEXT, 
-            content_json TEXT, 
-            constraints TEXT, 
-            status TEXT,
-            tokens_used INTEGER DEFAULT 0,
-            cost_rub REAL DEFAULT 0.0
+            id TEXT PRIMARY KEY, framework_json TEXT, content_json TEXT, 
+            constraints TEXT, status TEXT, tokens_used INTEGER DEFAULT 0, cost_rub REAL DEFAULT 0.0
         )
     ''')
-    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS audit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT,
-            action TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, action TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
-    # Миграции
     migrations = ["constraints TEXT", "tokens_used INTEGER DEFAULT 0", "cost_rub REAL DEFAULT 0.0"]
     for col in migrations:
         try:
             cursor.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
         except sqlite3.OperationalError:
             pass
-            
     conn.commit()
     conn.close()
 
-def save_session(
-    session_id: str, 
-    framework: Framework, 
-    status: str, 
-    content: dict = None, 
-    constraints: str = None,
-    tokens_used: int = 0,
-    cost_rub: float = 0.0
-):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Сохранение состояния сессии и метрик."""
+async def init_db():
+    """[ФИКС АРХИТЕКТУРЫ]: Асинхронная инициализация БД."""
+    await asyncio.to_thread(_init_db_sync)
+
+def _save_session_sync(session_id, framework_json, status, content_str, constraints, tokens_used, cost_rub):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    content_str = json.dumps(content, ensure_ascii=False) if content else None
-    
     cursor.execute('''
         INSERT OR REPLACE INTO sessions (id, framework_json, content_json, constraints, status, tokens_used, cost_rub)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (session_id, framework.model_dump_json(), content_str, constraints, status, tokens_used, cost_rub))
-    
+    ''', (session_id, framework_json, content_str, constraints, status, tokens_used, cost_rub))
     conn.commit()
     conn.close()
 
-def get_session(session_id: str) -> dict:
-    """[ТРЕБОВАНИЕ КЕЙСА]: Восстановление контекста сессии."""
+async def save_session(
+    session_id: str, framework: Framework, status: str, 
+    content: dict = None, constraints: str = None, tokens_used: int = 0, cost_rub: float = 0.0
+):
+    """[ФИКС АРХИТЕКТУРЫ]: Сохранение в БД без блокировки event loop."""
+    content_str = json.dumps(content, ensure_ascii=False) if content else None
+    await asyncio.to_thread(
+        _save_session_sync, session_id, framework.model_dump_json(), 
+        status, content_str, constraints, tokens_used, cost_rub
+    )
+
+def _get_session_sync(session_id: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT framework_json, content_json, constraints, status, tokens_used, cost_rub 
-        FROM sessions WHERE id = ?
-    ''', (session_id,))
+    cursor.execute('SELECT framework_json, content_json, constraints, status, tokens_used, cost_rub FROM sessions WHERE id = ?', (session_id,))
     row = cursor.fetchone()
     conn.close()
-    
+    return row
+
+async def get_session(session_id: str) -> dict:
+    """[ФИКС АРХИТЕКТУРЫ]: Асинхронное чтение из БД."""
+    row = await asyncio.to_thread(_get_session_sync, session_id)
     if row:
         return {
             "framework": Framework.model_validate_json(row[0]),
             "content": json.loads(row[1]) if row[1] else None,
-            "constraints": row[2],
-            "status": row[3],
-            "tokens_used": row[4],
-            "cost_rub": row[5]
+            "constraints": row[2], "status": row[3], "tokens_used": row[4], "cost_rub": row[5]
         }
     return None
 
-def log_action(session_id: str, action: str):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Аудит действий."""
+def _log_action_sync(session_id: str, action: str):
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.execute('INSERT INTO audit_logs (session_id, action) VALUES (?, ?)', (session_id, action))
         conn.commit()
         conn.close()
     except Exception as e:
-        logger.error(f"Ошибка записи аудита: {e}")
+        logger.error(f"Ошибка аудита: {e}")
 
-def get_analytics() -> dict:
-    """
-    [УНИКАЛЬНАЯ ФИЧА]: Сбор реальной статистики из БД.
-    Убрана оценка сэкономленных часов, оставлены только факты.
-    """
+async def log_action(session_id: str, action: str):
+    await asyncio.to_thread(_log_action_sync, session_id, action)
+
+def _get_analytics_sync():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*), SUM(tokens_used), SUM(cost_rub) FROM sessions WHERE status = 'completed'")
+    row = cursor.fetchone()
+    conn.close()
+    return row
+
+async def get_analytics() -> dict:
+    """[ФИКС АРХИТЕКТУРЫ]: Асинхронный сбор статистики."""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Считаем количество успешно завершенных программ
-        cursor.execute("SELECT COUNT(*) FROM sessions WHERE status = 'completed'")
-        completed = cursor.fetchone()[0]
-        
-        # Суммарно потраченные токены и рубли
-        cursor.execute("SELECT SUM(tokens_used), SUM(cost_rub) FROM sessions WHERE status = 'completed'")
-        sums = cursor.fetchone()
-        total_tokens = sums[0] if sums[0] else 0
-        total_cost = sums[1] if sums[1] else 0.0
-        
-        conn.close()
-        
+        completed, total_tokens, total_cost = await asyncio.to_thread(_get_analytics_sync)
         return {
-            "completed_programs": completed,
-            "total_cost_rub": round(total_cost, 2),
-            "total_tokens_used": total_tokens
+            "completed_programs": completed or 0,
+            "total_cost_rub": round(total_cost or 0.0, 2),
+            "total_tokens_used": total_tokens or 0
         }
     except Exception as e:
-        logger.error(f"Ошибка получения аналитики: {e}")
-        return {
-            "completed_programs": 0, 
-            "total_cost_rub": 0.0,
-            "total_tokens_used": 0
-        }
+        logger.error(f"Ошибка аналитики: {e}")
+        return {"completed_programs": 0, "total_cost_rub": 0.0, "total_tokens_used": 0}
