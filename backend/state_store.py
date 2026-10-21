@@ -7,20 +7,22 @@ DB_PATH = "sessions.db"
 
 def init_db():
     """
-    [ТРЕБОВАНИЕ КЕЙСА]: Персистентное хранилище сессий и аудит.
-    Добавлена колонка constraints для сохранения ограничений методиста между шагами.
+    [ТРЕБОВАНИЕ КЕЙСА]: Персистентное хранилище сессий, аудита и аналитики.
+    Добавлены колонки для подсчета токенов и стоимости в рублях.
     """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Таблица сессий (добавлено поле constraints)
+    # Таблица сессий
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY, 
             framework_json TEXT, 
             content_json TEXT, 
             constraints TEXT, 
-            status TEXT
+            status TEXT,
+            tokens_used INTEGER DEFAULT 0,
+            cost_rub REAL DEFAULT 0.0
         )
     ''')
     
@@ -34,11 +36,12 @@ def init_db():
         )
     ''')
     
-    # Простейшая миграция на случай, если БД уже существует со старой схемой
+    # Миграция для существующих баз (добавляем колонки, если их нет)
     try:
-        cursor.execute("ALTER TABLE sessions ADD COLUMN constraints TEXT")
+        cursor.execute("ALTER TABLE sessions ADD COLUMN tokens_used INTEGER DEFAULT 0")
+        cursor.execute("ALTER TABLE sessions ADD COLUMN cost_rub REAL DEFAULT 0.0")
     except sqlite3.OperationalError:
-        pass # Колонка уже существует, всё ок
+        pass # Колонки уже существуют
         
     conn.commit()
     conn.close()
@@ -48,28 +51,30 @@ def save_session(
     framework: Framework, 
     status: str, 
     content: dict = None, 
-    constraints: str = None
+    constraints: str = None,
+    tokens_used: int = 0,
+    cost_rub: float = 0.0
 ):
-    """Сохраняет или обновляет сессию в БД."""
+    """Сохраняет или обновляет сессию и метрики расхода токенов."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     content_str = json.dumps(content, ensure_ascii=False) if content else None
     
     cursor.execute('''
-        INSERT OR REPLACE INTO sessions (id, framework_json, content_json, constraints, status)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (session_id, framework.model_dump_json(), content_str, constraints, status))
+        INSERT OR REPLACE INTO sessions (id, framework_json, content_json, constraints, status, tokens_used, cost_rub)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (session_id, framework.model_dump_json(), content_str, constraints, status, tokens_used, cost_rub))
     
     conn.commit()
     conn.close()
 
 def get_session(session_id: str) -> dict:
-    """Достает сессию из БД по ID."""
+    """Достает сессию из БД, включая аналитику."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT framework_json, content_json, constraints, status 
+        SELECT framework_json, content_json, constraints, status, tokens_used, cost_rub 
         FROM sessions WHERE id = ?
     ''', (session_id,))
     row = cursor.fetchone()
@@ -80,12 +85,14 @@ def get_session(session_id: str) -> dict:
             "framework": Framework.model_validate_json(row[0]),
             "content": json.loads(row[1]) if row[1] else None,
             "constraints": row[2],
-            "status": row[3]
+            "status": row[3],
+            "tokens_used": row[4],
+            "cost_rub": row[5]
         }
     return None
 
 def log_action(session_id: str, action: str):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Логирование действий методиста."""
+    """Логирование действий методиста."""
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.execute('INSERT INTO audit_logs (session_id, action) VALUES (?, ?)', (session_id, action))
@@ -93,28 +100,3 @@ def log_action(session_id: str, action: str):
         conn.close()
     except Exception as e:
         logger.error(f"Ошибка аудита: {e}")
-
-# В backend/state_store.py добавь функцию для сбора статистики:
-def get_analytics() -> dict:
-    """[ТРЕБОВАНИЕ КЕЙСА]: Сбор метрик для оценки экономической эффективности."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Считаем общее количество сессий
-    cursor.execute("SELECT COUNT(*) FROM sessions")
-    total_sessions = cursor.fetchone()[0]
-    
-    # Считаем количество завершенных программ
-    cursor.execute("SELECT COUNT(*) FROM sessions WHERE status = 'completed'")
-    completed_sessions = cursor.fetchone()[0]
-    
-    conn.close()
-    
-    return {
-        "total_sessions": total_sessions,
-        "completed_programs": completed_sessions,
-        # Примерная оценка экономии (1 программа = экономия 40 часов методиста)
-        "estimated_hours_saved": completed_sessions * 40,
-        # Средняя стоимость генерации (условно 15 рублей за программу, берем из логов)
-        "estimated_cost_rub": completed_sessions * 15.0 
-    }

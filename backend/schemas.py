@@ -24,38 +24,35 @@ class Framework(BaseModel):
     total_hours: int = Field(..., ge=16, le=500)
     final_assessment_hours: int = Field(default=2, ge=0)
 
+# [ТРЕБОВАНИЕ КЕЙСА]: Модель для персональной аналитики пользователя
+class AnalyticsStats(BaseModel):
+    tokens_spent: int = 0
+    cost_rub: float = 0.0
+    hours_saved: float = 40.0 # Средняя экономия времени методиста (в часах)
+
 class GenerateRequest(BaseModel):
     topic: str = Field(..., min_length=3, max_length=100)
     hours: Optional[int] = Field(default=None, ge=16, le=500)
     template_type: Optional[Literal["ДПО", "Общеразвивающая", "auto"]] = Field(default="auto")
     reference_text: Optional[str] = Field(default=None, max_length=15000)
     constraints: Optional[str] = Field(default=None, max_length=1000)
+    # [ТРЕБОВАНИЕ КЕЙСА]: Гибкий контроль бюджета токенов
+    token_limit: Optional[int] = Field(default=50000, description="Лимит токенов на генерацию")
 
-    # [ТРЕБОВАНИЕ КЕЙСА / БЕЗОПАСНОСТЬ]: Санитайзер ввода (Защита от Prompt Injection и разрыва JSON)
+    # [БЕЗОПАСНОСТЬ]: Санитайзер ввода (Защита от Prompt Injection и разрыва JSON)
     @field_validator('topic', 'constraints')
     @classmethod
     def sanitize_input(cls, v: str) -> str:
         if not v:
             return v
-        
-        # 1. Экранируем кавычки, чтобы не сломать JSON
         v = v.replace('"', '\\"')
-        
-        # 2. Удаляем XML-теги, чтобы не сломать структуру промпта (<topic>, <constraints>)
         v = re.sub(r'<[^>]+>', '', v)
-        
-        # 3. Блокируем попытки инъекций (prompt injection)
         injection_patterns = [
-            r'(?i)ignore previous instructions',
-            r'(?i)забудь все инструкции',
-            r'(?i)system prompt',
-            r'(?i)выведи текст',
-            r'(?i)сломай json',
-            r'(?i)ignore the above'
+            r'(?i)ignore previous instructions', r'(?i)забудь все инструкции',
+            r'(?i)system prompt', r'(?i)выведи текст', r'(?i)сломай json', r'(?i)ignore the above'
         ]
         for pattern in injection_patterns:
             v = re.sub(pattern, '[УДАЛЕНО]', v)
-            
         return v.strip()
 
 class RevisionRequest(BaseModel):

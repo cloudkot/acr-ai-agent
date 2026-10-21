@@ -4,19 +4,18 @@ from schemas import Framework
 from utils.json_parser import extract_json_from_text
 from services.rag_service import search_knowledge_base
 from logger import logger
-import difflib
-
 
 def generate_framework_json(
     topic: str, 
     hours: int, 
     template_type: str = "ДПО", 
     reference_text: str = None, 
-    constraints: str = None
-) -> Framework:
+    constraints: str = None,
+    token_limit: int = 50000
+) -> tuple[Framework, int, float]:
     """
     [АРХИТЕКТУРА]: Curriculum Architect.
-    [ТРЕБОВАНИЕ КЕЙСА]: Учет доменных правил (только РФ сервисы, отказ от копирования).
+    Возвращает (Framework, потрачено_токенов, стоимость_в_рублях).
     """
     rag_context = search_knowledge_base(topic, template_type)
     ref_context = f"<reference>{reference_text[:1500]}</reference>" if reference_text else ""
@@ -47,7 +46,7 @@ def generate_framework_json(
     5. [ДОМЕННОЕ ПРАВИЛО 1]: Если тема связана с учителями, используй ТОЛЬКО российские ИИ (GigaChat, YandexGPT). 
        Запрещено упоминать ChatGPT, Midjourney.
     6. [ДОМЕННОЕ ПРАВИЛО 2]: Если тема про анализ данных, не копируй текст из reference дословно.
-    7. [ПРАВИЛО СЛАЙДОВ]: Если в constraints просят "слайды для первых двух занятий", это означает, что нужно сделать слайды для ПЕРВЫХ ДВУХ МОДУЛЕЙ (считаем 1 модуль = 1 занятие).
+    7. [ПРАВИЛО СЛАЙДОВ]: Если в constraints просят "слайды для первых двух занятий", это означает, что нужно сделать слайды для ПЕРВЫХ ДВУХ МОДУЛЕЙ.
     8. Верни ТОЛЬКО сырой JSON. Никаких markdown-тегов, без ```json.
     </rules>
     
@@ -68,9 +67,18 @@ def generate_framework_json(
     Сгенерируй JSON, строго соблюдая <rules>.
     """
     
+    total_tokens = 0
+    total_cost = 0.0
+    
     for attempt in range(3):
         try:
-            response_text = ask_llm(prompt, task_type="framework", is_json=True)
+            # Распаковываем ответ LLM (текст, токены, стоимость)
+            response_text, tokens, cost = ask_llm(
+                prompt, task_type="framework", is_json=True, token_limit=token_limit
+            )
+            total_tokens += tokens
+            total_cost += cost
+            
             data = extract_json_from_text(response_text)
             
             # Принудительно перезаписываем критичные поля
@@ -78,6 +86,8 @@ def generate_framework_json(
             data["template_type"] = template_type
             if template_type == "Общеразвивающая":
                 data["prof_standard"] = None
+            elif not data.get("prof_standard"):
+                data["prof_standard"] = "[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК] Профстандарт не указан"
                 
             framework_obj = Framework(**data)
             
@@ -85,16 +95,22 @@ def generate_framework_json(
             for comp in framework_obj.competencies:
                 comp.name = comp.name.replace("[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]", "").strip()
                 
-            return framework_obj
+            return framework_obj, total_tokens, total_cost
+            
         except Exception as e:
             logger.warning(f"Ошибка парсинга JSON от LLM (попытка {attempt+1}): {e}")
             if attempt == 2:
                 raise ValueError(f"LLM не смогла выдать правильный JSON после 3 попыток. Ошибка: {e}")
             time.sleep(1.5)
 
-def revise_framework_json(current_framework: Framework, instruction: str) -> Framework:
+def revise_framework_json(
+    current_framework: Framework, 
+    instruction: str, 
+    token_limit: int = 50000
+) -> tuple[Framework, int, float]:
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка каркаса.
+    Возвращает (Framework, потрачено_токенов, стоимость_в_рублях).
     """
     current_json = current_framework.model_dump_json(indent=2)
     
@@ -107,7 +123,10 @@ def revise_framework_json(current_framework: Framework, instruction: str) -> Fra
     </rules>
     """
     
-    response_text = ask_llm(prompt, task_type="revision", is_json=True)
+    response_text, tokens, cost = ask_llm(
+        prompt, task_type="revision", is_json=True, token_limit=token_limit
+    )
+    
     data = extract_json_from_text(response_text)
     
     # Защита от галлюцинаций LLM при правках
@@ -119,22 +138,4 @@ def revise_framework_json(current_framework: Framework, instruction: str) -> Fra
     for comp in framework_obj.competencies:
         comp.name = comp.name.replace("[НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК]", "").strip()
         
-    return framework_obj
-
-def check_plagiarism(generated_text: str, reference_text: str) -> float:
-    """
-    [ТРЕБОВАНИЕ КЕЙСА]: Защита от дословного копирования.
-    Возвращает процент схожести (0.0 - 1.0).
-    """
-    if not reference_text:
-        return 0.0
-    matcher = difflib.SequenceMatcher(None, reference_text.lower(), generated_text.lower())
-    return matcher.ratio()
-
-# Внутри функции generate_framework_json, после получения framework_obj:
-    if reference_text:
-        similarity = check_plagiarism(framework_obj.goal, reference_text)
-        if similarity > 0.8:
-            logger.warning(f"Обнаружено сильное копирование из референса! Схожесть: {similarity*100:.1f}%")
-            # Если скопировано слишком много, добавляем пометку
-            framework_obj.goal = f"[ВНИМАНИЕ: Высокая схожесть с референсом] {framework_obj.goal}"
+    return framework_obj, tokens, cost

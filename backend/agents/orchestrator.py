@@ -32,7 +32,8 @@ def clarify_and_classify(topic: str, hours: int = None, reference_text: str = No
     <format>{{"template_type": "ДПО", "questions": ["Вопрос 1", "Вопрос 2"]}}</format>
     """
     try:
-        raw = ask_llm(prompt, task_type="content", is_json=True)
+        # Распаковываем кортеж от ask_llm (текст, токены, стоимость)
+        raw, _, _ = ask_llm(prompt, task_type="content", is_json=True)
         data = extract_json_from_text(raw)
         return {
             "template_type": data.get("template_type", "ДПО"),
@@ -42,10 +43,10 @@ def clarify_and_classify(topic: str, hours: int = None, reference_text: str = No
         logger.error(f"Ошибка автоклассификации: {e}")
         return {"template_type": "ДПО", "questions": []}
 
-def process_request(topic: str, hours: int = None, template_type: str = "auto", reference_text: str = None, constraints: str = None):
-    """[СЦЕНАРИЙ КЕЙСА]: Прием запроса, обработка нехватки данных и генерация каркаса."""
+def process_request(topic: str, hours: int = None, template_type: str = "auto", reference_text: str = None, constraints: str = None, token_limit: int = 50000):
+    """[СЦЕНАРИЙ КЕЙСА]: Прием запроса и генерация каркаса с контролем токенов."""
     session_id = str(uuid.uuid4())
-    logger.info(f"Запрос: {topic}, {hours} ч., шаблон: {template_type}, ограничения: {'да' if constraints else 'нет'}")
+    logger.info(f"Запрос: {topic}, {hours} ч., лимит: {token_limit}")
     
     try:
         needs_clarification = False
@@ -65,18 +66,23 @@ def process_request(topic: str, hours: int = None, template_type: str = "auto", 
                 "session_id": session_id,
                 "status": "clarification_needed",
                 "questions": questions,
-                "message": "Не хватает данных для генерации. Ответьте на вопросы."
+                "message": "Не хватает данных для генерации."
             }
 
-        # 2. Генерация каркаса
-        framework_obj = generate_framework_json(topic, hours, template_type, reference_text, constraints)
+        # Генерация каркаса (возвращает Framework, tokens, cost)
+        framework_obj, tokens, cost = generate_framework_json(
+            topic, hours, template_type, reference_text, constraints, token_limit
+        )
         
-        # 3. Автокоррекция часов (теперь с учетом ограничений: например, обнуление лекций)
+        # Автокоррекция часов
         framework_obj = auto_correct_hours(framework_obj, hours, constraints)
         report = run_full_validation(framework_obj)
             
-        # 4. Сохранение сессии
-        save_session(session_id, framework_obj, "waiting_for_approval", constraints=constraints)
+        # Сохраняем сессию, передавая потраченные токены и стоимость
+        save_session(
+            session_id, framework_obj, "waiting_for_approval", 
+            constraints=constraints, tokens_used=tokens, cost_rub=cost
+        )
         log_action(session_id, "generated")
         
         return {
@@ -90,7 +96,7 @@ def process_request(topic: str, hours: int = None, template_type: str = "auto", 
         logger.error(f"Ошибка при генерации: {e}")
         return {"session_id": session_id, "status": "error", "message": str(e)}
 
-def approve_and_generate(session_id: str):
+def approve_and_generate(session_id: str, token_limit: int = 50000):
     """[СЦЕНАРИЙ КЕЙСА]: Утверждение каркаса и генерация контента."""
     session = get_session(session_id)
     if not session or session["status"] != "waiting_for_approval":
@@ -101,37 +107,48 @@ def approve_and_generate(session_id: str):
     try:
         constraints = session.get("constraints")
         
-        # Генерация контента
-        content = generate_content_pack(session["framework"], constraints)
+        # Генерируем контент (возвращает dict с контентом, tokens, cost)
+        content_data = generate_content_pack(session["framework"], constraints, token_limit)
         
-        if not content.get("tests") and not content.get("lectures"):
-            logger.error("Генерация контента не удалась: пустые тесты и лекции")
-            return {"error": "Не удалось сгенерировать материалы. Попробуйте еще раз."}
-
-        # [ФИКС РЕВЬЮЕРА]: ПРИНУДИТЕЛЬНАЯ КОРРЕКЦИЯ КОНТЕНТА
-        # Обрезаем вопросы, фильтруем слайды и т.д.
-        content = enforce_content_constraints(session["framework"], content, constraints)
-
-        # Проверяем, что получилось после коррекции
-        constraints_report = check_content_constraints(session["framework"], content, constraints)
+        # Достаем статистику из контента
+        new_tokens = content_data.pop("total_tokens", 0)
+        new_cost = content_data.pop("total_cost", 0.0)
         
-        if not constraints_report["constraints_ok"]:
-            logger.warning(f"Остались нарушения ограничений: {constraints_report['errors']}")
+        if not content_data.get("tests") and not content_data.get("lectures"):
+            return {"error": "Не удалось сгенерировать материалы."}
+
+        # Принудительная коррекция
+        content_data = enforce_content_constraints(session["framework"], content_data, constraints)
+        constraints_report = check_content_constraints(session["framework"], content_data, constraints)
             
-        save_session(session_id, session["framework"], "completed", content, constraints)
+        # Сохраняем сессию, суммируя токены со всех этапов
+        total_tokens = session.get("tokens_used", 0) + new_tokens
+        total_cost = session.get("cost_rub", 0.0) + new_cost
+        
+        save_session(
+            session_id, session["framework"], "completed", 
+            content=content_data, constraints=constraints,
+            tokens_used=total_tokens, cost_rub=total_cost
+        )
         log_action(session_id, "approved")
         
         return {
             "session_id": session_id, 
             "status": "completed", 
-            "content": content,
-            "constraints_check": constraints_report
+            "content": content_data,
+            "constraints_check": constraints_report,
+            # Отдаем аналитику на фронтенд
+            "analytics": {
+                "tokens_spent": total_tokens,
+                "cost_rub": round(total_cost, 2),
+                "hours_saved": 40.0
+            }
         }
     except Exception as e:
         logger.error(f"Ошибка генерации контента: {e}")
         return {"error": f"Ошибка генерации контента: {str(e)}"}
 
-def revise_session(session_id: str, instruction: str):
+def revise_session(session_id: str, instruction: str, token_limit: int = 50000):
     """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка каркаса."""
     session = get_session(session_id)
     if not session:
@@ -139,13 +156,25 @@ def revise_session(session_id: str, instruction: str):
         
     logger.info(f"Точечная правка сессии {session_id}: {instruction}")
     
-    new_framework = revise_framework_json(session["framework"], instruction)
-    save_session(session_id, new_framework, "waiting_for_approval", constraints=session.get("constraints"))
+    new_framework, tokens, cost = revise_framework_json(session["framework"], instruction, token_limit)
+    
+    total_tokens = session.get("tokens_used", 0) + tokens
+    total_cost = session.get("cost_rub", 0.0) + cost
+    
+    save_session(
+        session_id, new_framework, "waiting_for_approval", 
+        constraints=session.get("constraints"),
+        tokens_used=total_tokens, cost_rub=total_cost
+    )
     log_action(session_id, "revised")
     
     return {
         "session_id": session_id,
         "status": "waiting_for_approval",
-        "message": "Каркас обновлен согласно правкам.",
-        "framework": new_framework.model_dump()
+        "message": "Каркас обновлен.",
+        "framework": new_framework.model_dump(),
+        "analytics": {
+            "tokens_spent": total_tokens,
+            "cost_rub": round(total_cost, 2)
+        }
     }

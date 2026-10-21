@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -8,8 +8,8 @@ from urllib.parse import urlparse
 
 # Импорты наших модулей
 from agents.orchestrator import process_request, approve_and_generate, revise_session, clarify_and_classify
-from state_store import get_session, init_db
-from export import export_to_docx, export_to_pptx, export_tests_to_lms, export_to_json
+from state_store import get_session, init_db, get_analytics
+from export import export_to_docx, export_to_pptx, export_tests_to_lms, export_to_json, export_tests_to_moodle_xml
 from services.reference_parser import save_and_parse_reference
 from agents.validator import run_full_validation, validate_coverage_with_content, check_content_constraints
 from schemas import GenerateRequest, RevisionRequest
@@ -73,28 +73,34 @@ def clarify_endpoint(req: ClarifyRequest):
     """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автовыбор шаблона до генерации."""
     return clarify_and_classify(req.topic, req.hours)
 
+@app.get("/api/analytics")
+def analytics_endpoint():
+    """[УНИКАЛЬНАЯ ФИЧА]: Глобальная аналитика для дашборда."""
+    return get_analytics()
+
 # --- ОСНОВНОЙ СЦЕНАРИЙ ---
 
 @app.post("/api/generate")
 def generate_framework_endpoint(req: GenerateRequest):
-    """Шаг 1: Прием запроса, референсов, ограничений и генерация каркаса."""
+    """Шаг 1: Прием запроса, референсов, ограничений и лимита токенов."""
     return process_request(
         topic=req.topic, 
         hours=req.hours, 
         template_type=req.template_type, 
         reference_text=req.reference_text,
-        constraints=req.constraints
+        constraints=req.constraints,
+        token_limit=req.token_limit
     )
 
 @app.post("/api/revise/{session_id}")
-def revise_endpoint(session_id: str, req: RevisionRequest):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка."""
-    return revise_session(session_id, req.instruction)
+def revise_endpoint(session_id: str, req: RevisionRequest, token_limit: int = Query(default=50000)):
+    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка с учетом лимита."""
+    return revise_session(session_id, req.instruction, token_limit)
 
 @app.post("/api/approve/{session_id}")
-def approve_endpoint(session_id: str):
-    """Шаг 2: Human-in-the-loop. Утверждение каркаса и генерация контента."""
-    return approve_and_generate(session_id)
+def approve_endpoint(session_id: str, token_limit: int = Query(default=50000)):
+    """Шаг 2: Human-in-the-loop. Генерация контента с учетом лимита."""
+    return approve_and_generate(session_id, token_limit)
 
 @app.get("/api/report/{session_id}")
 def get_validation_report(session_id: str):
@@ -108,8 +114,6 @@ def get_validation_report(session_id: str):
     if session["status"] == "completed" and session["content"]:
         coverage = validate_coverage_with_content(session["framework"], session["content"])
         base_report["deep_coverage"] = coverage
-        
-        # Добавляем проверку ограничений в общий отчет
         c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
         base_report["constraints_check"] = c_check
         
@@ -133,10 +137,7 @@ def export_docx_endpoint(session_id: str):
     session = get_session(session_id)
     if not session or session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Сессия не готова")
-    
-    # [ФИКС РЕВЬЮЕРА]: Вычисляем ограничения на лету и передаем в экспорт
     c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
-    
     filename = f"program_{session_id[:8]}.docx"
     export_to_docx(session["framework"], session["content"], filename, constraints_check=c_check)
     return FileResponse(filename, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename=filename)
@@ -146,9 +147,7 @@ def export_pptx_endpoint(session_id: str):
     session = get_session(session_id)
     if not session or session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Контент не сгенерирован")
-        
     c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
-    
     filename = f"presentation_{session_id[:8]}.pptx"
     export_to_pptx(session["framework"], session["content"], filename, constraints_check=c_check)
     return FileResponse(filename, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation", filename=filename)
@@ -162,14 +161,22 @@ def export_lms_endpoint(session_id: str):
     export_tests_to_lms(session["content"].get("tests", []), filename)
     return FileResponse(filename, media_type="text/plain", filename=filename)
 
+@app.get("/api/export-moodle/{session_id}")
+def export_moodle_endpoint(session_id: str):
+    """[ТРЕБОВАНИЕ КЕЙСА]: Экспорт в Moodle XML (сверх плана)."""
+    session = get_session(session_id)
+    if not session or session["status"] != "completed":
+        raise HTTPException(status_code=400, detail="Контент не сгенерирован")
+    filename = f"moodle_{session_id[:8]}.xml"
+    export_tests_to_moodle_xml(session["content"].get("tests", []), filename)
+    return FileResponse(filename, media_type="application/xml", filename=filename)
+
 @app.get("/api/export-json/{session_id}")
 def export_json_endpoint(session_id: str):
     session = get_session(session_id)
     if not session or not session["content"]:
         raise HTTPException(status_code=400, detail="Контент не сгенерирован")
-        
     c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
-    
     filename = f"bundle_{session_id[:8]}.json"
     export_to_json(session["framework"], session["content"], filename, constraints_check=c_check)
     return FileResponse(filename, media_type="application/json", filename=filename)
@@ -182,32 +189,3 @@ else:
     @app.get("/")
     def no_frontend():
         return {"message": "Frontend not built yet."}
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Критическая ошибка: {str(exc)}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "status": "error", 
-            "error_code": "INTERNAL_SERVER_ERROR",
-            "message": "Произошла внутренняя ошибка сервера. Попробуйте позже.",
-            "detail": str(exc)
-        }
-    )
-
-from state_store import get_session, init_db, get_analytics
-
-@app.get("/api/analytics")
-def analytics_endpoint():
-    """[ТРЕБОВАНИЕ КЕЙСА]: Метрики экономической эффективности."""
-    return get_analytics()
-
-@app.get("/api/export-moodle/{session_id}")
-def export_moodle_endpoint(session_id: str):
-    session = get_session(session_id)
-    if not session or session["status"] != "completed":
-        raise HTTPException(status_code=400, detail="Контент не сгенерирован")
-    filename = f"moodle_{session_id[:8]}.xml"
-    export_tests_to_moodle_xml(session["content"].get("tests", []), filename)
-    return FileResponse(filename, media_type="application/xml", filename=filename)
