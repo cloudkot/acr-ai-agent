@@ -38,7 +38,7 @@ class CurriculumSkill(BaseAgent):
 
 class ContentSkill(BaseAgent):
     def __init__(self):
-        super().__init__("Content Generator", "Параллельно генерирует тесты, семинары, лекции, слайды и библиографию.")
+        super().__init__("Content Generator", "Гранулярно (порциями) генерирует тесты, семинары, лекции, слайды и библиографию.")
         
     async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Выполнение навыка: Content Generator")
@@ -82,11 +82,14 @@ class AgentOrchestrator:
         self.revision_skill = RevisionSkill()
 
     async def run_generate_pipeline(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        # 1. Генерация каркаса
         context = await self.curriculum_skill.execute(context)
         
+        # 2. Автокоррекция и валидация
         context["framework"] = auto_correct_hours(context["framework"], context["hours"], context.get("constraints"))
         report = run_full_validation(context["framework"])
         
+        # 3. Сохранение состояния
         save_session(
             context["session_id"], context["framework"], "waiting_for_approval", 
             constraints=context.get("constraints"), tokens_used=context["tokens"], cost_rub=context["cost"]
@@ -114,11 +117,16 @@ class AgentOrchestrator:
             "cost": session.get("cost_rub", 0.0)
         }
         
+        # Генерация контента (гранулярная)
         context = await self.content_skill.execute(context)
         
+        # Принудительная валидация ограничений (например, слайды только для pandas)
         context["content"] = enforce_content_constraints(context["framework"], context["content"], context.get("constraints"))
+        
+        # Сбор ошибок (если LLM что-то упустила)
         constraints_report = check_content_constraints(context["framework"], context["content"], context.get("constraints"))
         
+        # Сохранение результата
         save_session(
             session_id, context["framework"], "completed", 
             content=context["content"], constraints=context.get("constraints"),
@@ -178,7 +186,7 @@ class AgentOrchestrator:
 orchestrator = AgentOrchestrator()
 
 async def clarify_and_classify(topic: str, hours: int = None, reference_text: str = None) -> dict:
-    """Уточняющие вопросы и автовыбор шаблона."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Уточняющие вопросы и автовыбор шаблона."""
     ref_context = f"\nРеференс: {reference_text[:500]}" if reference_text else ""
     hours_context = f"Объем: {hours} часов." if hours else "Объем НЕ УКАЗАН."
     
@@ -242,7 +250,7 @@ async def process_request(topic: str, hours: int = None, template_type: str = "a
         return {"session_id": session_id, "status": "error", "message": str(e)}
 
 async def approve_and_generate(session_id: str):
-    """Шаг 2: Утверждение и асинхронная генерация контента."""
+    """Шаг 2: Утверждение и гранулярная генерация контента."""
     return await orchestrator.run_content_pipeline(session_id)
 
 async def revise_session(session_id: str, instruction: str):

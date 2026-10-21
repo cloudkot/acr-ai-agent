@@ -6,6 +6,11 @@ from schemas import Framework
 from utils.json_parser import extract_json_from_text
 from logger import logger
 
+def _chunk_list(lst: list, chunk_size: int):
+    """[УТИЛИТА]: Разбивает список на подсписки заданного размера."""
+    for i in range(0, len(lst), chunk_size):
+        yield lst[i:i + chunk_size]
+
 async def _generate_async_retry(prompt: str, task_type: str = "content", retries: int = 3) -> tuple[any, int, float]:
     """[ТРЕБОВАНИЕ КЕЙСА]: Асинхронная обертка с ретраями."""
     total_tokens = 0
@@ -24,185 +29,209 @@ async def _generate_async_retry(prompt: str, task_type: str = "content", retries
             await asyncio.sleep(1.5)
 
 def _generate_smart_fallback_seminar(framework: Framework, module_title: str, module_hours: int) -> dict:
-    """
-    [ML-СКЛЕЙКА]: Умный fallback. Не просто шаблон, а алгоритмический поиск 
-    компетенций, привязанных к этому модулю через related_topics.
-    """
+    """[ML-СКЛЕЙКА]: Умный fallback для семинара на основе компетенций."""
     related_comps = []
     for comp in framework.competencies:
-        # Проверяем, есть ли этот модуль в списке тем компетенции
         if any(module_title.lower() in topic.lower() or topic.lower() in module_title.lower() for topic in comp.related_topics):
             related_comps.append(comp.name)
             
     if related_comps:
         comp_str = ", ".join(related_comps)
-        task_text = f"Практическое задание по модулю '{module_title}' ({module_hours} ч.): разработать решение, демонстрирующее владение следующими компетенциями: {comp_str}. Провести защиту и обосновать архитектурные решения."
+        task_text = f"Практическое задание по модулю '{module_title}' ({module_hours} ч.): разработать решение, демонстрирующее владение компетенциями: {comp_str}."
         competency_target = related_comps[0]
     else:
-        task_text = f"Практическое задание по модулю '{module_title}' ({module_hours} ч.): реализовать сквозной сценарий применения изученных инструментов и методологий в рамках данного модуля."
+        task_text = f"Практическое задание по модулю '{module_title}' ({module_hours} ч.): реализовать сквозной сценарий применения изученных инструментов."
         competency_target = "Разработка и защита проектных решений"
 
     return {
         "module_title": module_title,
         "task": task_text,
-        "criteria": "Критерии оценки: 1) Корректность применения инструментов; 2) Полнота реализации; 3) Качество защиты решения.",
+        "criteria": "Критерии оценки: 1) Корректность применения инструментов; 2) Полнота реализации; 3) Качество защиты.",
         "related_competency": competency_target
     }
 
 async def generate_content_pack(framework: Framework, constraints: str = None) -> dict:
-    """[АРХИТЕКТУРА]: Истинно параллельная генерация контента с батчингом."""
+    """
+    [АРХИТЕКТУРА]: Гранулярная параллельная генерация контента.
+    Оркестратор дробит задачи на мелкие порции, каждая из которых уходит отдельным запросом.
+    """
     compact_data = {
         "template_type": framework.template_type,
         "prof_standard": framework.prof_standard,
         "total_hours": framework.total_hours,
-        "modules": [{"title": m.title, "hours": m.total_hours} for m in framework.modules],
         "competencies": [c.name for c in framework.competencies]
     }
-    compact_json = json.dumps(compact_data, ensure_ascii=False, separators=(',', ':'))
+    base_json = json.dumps(compact_data, ensure_ascii=False, separators=(',', ':'))
     constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""
 
     total_hours = framework.total_hours
-    num_modules = len(framework.modules)
-    
-    batch_size = 3
     target_q = max(10, total_hours // 24)
     if constraints:
         match = re.search(r'(\d+)\s*(вопрос|тест|задани)', constraints.lower())
         if match: target_q = int(match.group(1))
 
-    async def task_tests():
+    # Контейнеры для результатов
+    all_tests, all_seminars, all_lectures = [], [], []
+    all_slides, all_work_programs, all_bibliography = [], [], []
+    
+    total_tokens = 0
+    total_cost = 0.0
+
+    def _accumulate(t, c):
+        nonlocal total_tokens, total_cost
+        total_tokens += t
+        total_cost += c
+
+    # --- 1. ТЕСТЫ (порциями по 5 штук) ---
+    async def fetch_tests_batch(batch_size: int, part_num: int):
         prompt = f"""
-        <role>Тестолог.</role><context>{compact_json}</context>{constraints_context}
-        <task>Составь РОВНО {target_q} вопросов.</task>
+        <role>Тестолог.</role><context>{base_json}</context>{constraints_context}
+        <task>Составь ровно {batch_size} тестовых вопросов (часть {part_num}).</task>
         <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown.</rules>
         <format>[{{"question":"...", "options":["1","2","3","4"], "correct_answer":"1", "related_competency":"..."}}]</format>
         """
         data, t, c = await _generate_async_retry(prompt, "content")
+        _accumulate(t, c)
         if isinstance(data, dict): data = data.get("questions", [data])
-        if not isinstance(data, list): data = []
-        return [x for x in data if isinstance(x, dict)][:target_q], t, c
+        if isinstance(data, list): return [x for x in data if isinstance(x, dict)]
+        return []
 
-    async def task_seminars():
-        all_seminars = []
-        total_t = 0
-        total_c = 0.0
-        
-        for i in range(0, num_modules, batch_size):
-            batch = framework.modules[i:i+batch_size]
-            batch_titles = [m.title for m in batch]
-            
-            prompt = f"""
-            <role>Практик.</role><context>{compact_json}</context>{constraints_context}
-            <task>Составь практические задания ТОЛЬКО для этих модулей: {batch_titles}. По одному на каждый.</task>
-            <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown.</rules>
-            <format>[{{"module_title":"...", "task":"...", "criteria":"...", "related_competency":"..."}}]</format>
-            """
-            try:
-                data, t, c = await _generate_async_retry(prompt, "content")
-                total_t += t
-                total_c += c
-                
-                if isinstance(data, dict): data = data.get("seminars", [data])
-                if isinstance(data, list):
-                    all_seminars.extend([x for x in data if isinstance(x, dict)])
-            except Exception as e:
-                logger.error(f"Ошибка при генерации батча семинаров: {e}")
-                
-        # ML-Склейка с использованием умного fallback
-        final_seminars = []
-        for mod in framework.modules:
-            found = next((s for s in all_seminars if mod.title.lower() in s.get("module_title", "").lower()), None)
-            
-            if found and found.get("task") and found.get("task") != "None":
-                final_seminars.append(found)
-            else:
-                logger.info(f"[ML-СКЛЕЙКА] Вызов умного fallback для модуля: {mod.title}")
-                final_seminars.append(_generate_smart_fallback_seminar(framework, mod.title, mod.total_hours))
-                
-        return final_seminars, total_t, total_c
+    test_tasks = []
+    questions_left = target_q
+    part = 1
+    while questions_left > 0:
+        take = min(5, questions_left)
+        test_tasks.append(fetch_tests_batch(take, part))
+        questions_left -= take
+        part += 1
 
-    async def task_lectures():
+    # --- 2-5. ГЕНЕРАЦИЯ ПО МОДУЛЯМ (порциями по 3 модуля) ---
+    module_batches = list(_chunk_list(framework.modules, 3))
+
+    async def fetch_seminars_batch(batch):
+        titles = [m.title for m in batch]
         prompt = f"""
-        <role>Лектор.</role><context>{compact_json}</context>{constraints_context}
-        <task>Составь подробный план лекций (5-6 тезисов на каждый модуль).</task>
+        <role>Практик.</role><context>{base_json}</context>{constraints_context}
+        <task>Составь задания для семинаров ТОЛЬКО для модулей: {titles}.</task>
+        <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown.</rules>
+        <format>[{{"module_title":"...", "task":"...", "criteria":"...", "related_competency":"..."}}]</format>
+        """
+        data, t, c = await _generate_async_retry(prompt, "content")
+        _accumulate(t, c)
+        if isinstance(data, dict): data = data.get("seminars", [data])
+        return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+
+    async def fetch_lectures_batch(batch):
+        titles = [m.title for m in batch]
+        prompt = f"""
+        <role>Лектор.</role><context>{base_json}</context>{constraints_context}
+        <task>Составь подробный план лекций (5-6 тезисов) ТОЛЬКО для модулей: {titles}.</task>
         <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown.</rules>
         <format>[{{"module_title":"...", "theses":["тезис 1", "тезис 2"]}}]</format>
         """
         data, t, c = await _generate_async_retry(prompt, "content")
+        _accumulate(t, c)
         if isinstance(data, dict): data = data.get("modules_plan", [])
-        if not isinstance(data, list): data = []
-        return [x for x in data if isinstance(x, dict)], t, c
+        return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
 
-    async def task_slides():
+    async def fetch_slides_batch(batch):
+        titles = [m.title for m in batch]
         prompt = f"""
-        <role>Дизайнер.</role><context>{compact_json}</context>{constraints_context}
-        <task>Структура слайдов. Если просят конкретный модуль, делай только для него.</task>
+        <role>Дизайнер.</role><context>{base_json}</context>{constraints_context}
+        <task>Составь структуру слайдов ТОЛЬКО для модулей: {titles}.</task>
         <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown.</rules>
         <format>[{{"slide_title":"...", "module_title":"...", "bullets":["1","2"]}}]</format>
         """
         data, t, c = await _generate_async_retry(prompt, "content")
+        _accumulate(t, c)
         if isinstance(data, dict): data = data.get("slides", [])
-        if not isinstance(data, list): data = []
-        return [x for x in data if isinstance(x, dict)], t, c
+        return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
 
-    async def task_work_programs():
+    async def fetch_work_programs_batch(batch):
+        titles = [m.title for m in batch]
         prompt = f"""
-        <role>Методист.</role><context>{compact_json}</context>{constraints_context}
-        <task>Рабочие программы (3-4 предложения на каждый модуль).</task>
+        <role>Методист.</role><context>{base_json}</context>{constraints_context}
+        <task>Составь рабочие программы (3-4 предложения) ТОЛЬКО для модулей: {titles}.</task>
         <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown.</rules>
         <format>[{{"module_title":"...", "description":"..."}}]</format>
         """
         data, t, c = await _generate_async_retry(prompt, "content")
+        _accumulate(t, c)
         if isinstance(data, dict): data = data.get("work_programs", [])
-        if not isinstance(data, list): data = []
-        return [x for x in data if isinstance(x, dict)], t, c
+        return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
 
-    async def task_bibliography():
+    module_tasks = []
+    for batch in module_batches:
+        module_tasks.append(fetch_seminars_batch(batch))
+        module_tasks.append(fetch_lectures_batch(batch))
+        module_tasks.append(fetch_slides_batch(batch))
+        module_tasks.append(fetch_work_programs_batch(batch))
+
+    # --- 6. БИБЛИОГРАФИЯ (1 запрос) ---
+    async def fetch_bibliography():
         prompt = f"""
-        <role>Библиотекарь.</role><context>{compact_json}</context>{constraints_context}
+        <role>Библиотекарь.</role><context>{base_json}</context>{constraints_context}
         <task>Список 5-7 книг.</task>
         <rules>Верни ТОЛЬКО JSON-массив строк. Никакого markdown.</rules>
         <format>["Автор. Название. Год."]</format>
         """
         data, t, c = await _generate_async_retry(prompt, "content")
+        _accumulate(t, c)
         if isinstance(data, dict): data = data.get("bibliography", [])
-        if not isinstance(data, list): data = []
-        return [str(x) for x in data if isinstance(x, str)], t, c
+        return [str(x) for x in data if isinstance(x, str)] if isinstance(data, list) else []
 
-    # [АРХИТЕКТУРА]: Одновременный запуск всех 6 задач
-    logger.info(f"Запуск параллельных HTTP-запросов (6 задач) для {total_hours} ч...")
+    # --- ЗАПУСК ВСЕХ ГРАНУЛЯРНЫХ ЗАПРОСОВ ---
+    logger.info(f"Запуск {len(test_tasks) + len(module_tasks) + 1} гранулярных HTTP-запросов...")
     
-    results = await asyncio.gather(
-        task_tests(), task_seminars(), task_lectures(),
-        task_slides(), task_work_programs(), task_bibliography(),
-        return_exceptions=True
-    )
+    all_tasks = test_tasks + module_tasks + [fetch_bibliography()]
+    results = await asyncio.gather(*all_tasks, return_exceptions=True)
 
-    final_content = {
-        "tests": [], "seminars": [], "lectures": [], 
-        "slides": [], "work_programs": [], "bibliography": [],
-        "total_tokens": 0, "total_cost": 0.0
-    }
-    
-    task_names = ["tests", "seminars", "lectures", "slides", "work_programs", "bibliography"]
+    # --- СБОРКА РЕЗУЛЬТАТОВ ---
+    idx = 0
+    # Тесты
+    for _ in test_tasks:
+        res = results[idx]; idx += 1
+        if isinstance(res, list): all_tests.extend(res)
+    # Модульные задачи
+    for _ in module_batches:
+        sem_res = results[idx]; idx += 1
+        lec_res = results[idx]; idx += 1
+        sld_res = results[idx]; idx += 1
+        wp_res = results[idx]; idx += 1
+        
+        if isinstance(sem_res, list): all_seminars.extend(sem_res)
+        if isinstance(lec_res, list): all_lectures.extend(lec_res)
+        if isinstance(sld_res, list): all_slides.extend(sld_res)
+        if isinstance(wp_res, list): all_work_programs.extend(wp_res)
+    # Библиография
+    bib_res = results[idx]
+    if isinstance(bib_res, list): all_bibliography.extend(bib_res)
 
-    for i, res in enumerate(results):
-        name = task_names[i]
-        if isinstance(res, Exception):
-            logger.error(f"Задача '{name}' упала: {res}")
-            continue
-        data, t_tokens, t_cost = res
-        final_content[name] = data
-        final_content["total_tokens"] += t_tokens
-        final_content["total_cost"] += t_cost
+    # --- ML-СКЛЕЙКА (Smart Fallback) ---
+    final_seminars = []
+    for mod in framework.modules:
+        found = next((s for s in all_seminars if mod.title.lower() in s.get("module_title", "").lower()), None)
+        if found and found.get("task") and found.get("task") != "None":
+            final_seminars.append(found)
+        else:
+            final_seminars.append(_generate_smart_fallback_seminar(framework, mod.title, mod.total_hours))
 
     # Фильтрация слайдов
     if constraints:
         cons_lower = constraints.lower()
         if "первые два" in cons_lower or "первых двух" in cons_lower:
             allowed = [m.title.lower() for m in framework.modules[:2]]
-            final_content["slides"] = [s for s in final_content["slides"] if any(a in s.get("module_title", "").lower() for a in allowed)]
+            all_slides = [s for s in all_slides if any(a in s.get("module_title", "").lower() for a in allowed)]
         elif "pandas" in cons_lower:
-            final_content["slides"] = [s for s in final_content["slides"] if "pandas" in s.get("module_title", "").lower() or "pandas" in s.get("slide_title", "").lower()]
+            all_slides = [s for s in all_slides if "pandas" in s.get("module_title", "").lower() or "pandas" in s.get("slide_title", "").lower()]
 
-    return final_content
+    return {
+        "tests": all_tests[:target_q],
+        "seminars": final_seminars,
+        "lectures": all_lectures,
+        "slides": all_slides,
+        "work_programs": all_work_programs,
+        "bibliography": all_bibliography,
+        "total_tokens": total_tokens,
+        "total_cost": total_cost
+    }

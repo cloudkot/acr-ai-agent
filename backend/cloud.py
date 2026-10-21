@@ -13,13 +13,12 @@ if not any(domain in parsed_url.netloc for domain in ALLOWED_DOMAINS):
 
 api_key = os.getenv("OPENAI_API_KEY", "")
 
-# [АРХИТЕКТУРА]: Используем AsyncOpenAI для истинно параллельных HTTP-запросов
+# [АРХИТЕКТУРА]: AsyncOpenAI для параллельных запросов
 client = AsyncOpenAI(api_key=api_key or "dummy", base_url=base_url, timeout=180.0)
 
 MODEL_FAST = "GigaChat/GigaChat-3-Pro"
 MODEL_REASONING = "ai-sage/GigaChat3.5-432B-A28B-Reasoning"
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Цены Cloud.ru
 MODEL_PRICING = {
     MODEL_FAST: {"input": 73.03, "output": 176.39},
     MODEL_REASONING: {"input": 96.22, "output": 288.60}
@@ -41,21 +40,20 @@ class LLMRouter:
 async def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False) -> tuple[str, int, float]:
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Асинхронный вызов LLM.
-    Позволяет отправлять десятки запросов одновременно через asyncio.gather.
+    [ФИКС]: max_tokens увеличен до 10000, чтобы избежать обрезки JSON на больших объемах.
     """
     model = LLMRouter.get_model_for_task(task_type)
     
     kwargs = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 8000
+        "max_tokens": 10000  # <--- Увеличенный лимит вывода
     }
     if is_json:
         kwargs["response_format"] = {"type": "json_object"}
 
     for attempt in range(3):
         try:
-            # await client.chat.completions.create - это асинхронный HTTP запрос
             response = await client.chat.completions.create(**kwargs)
             content = response.choices[0].message.content
             
@@ -64,7 +62,6 @@ async def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False
                 
             usage = response.usage
             
-            # Калькулятор стоимости
             pricing = MODEL_PRICING.get(model, {"input": 0, "output": 0})
             input_cost = (usage.prompt_tokens / 1_000_000) * pricing["input"]
             output_cost = (usage.completion_tokens / 1_000_000) * pricing["output"]

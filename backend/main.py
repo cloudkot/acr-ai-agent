@@ -96,7 +96,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         }
     )
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Инициализация и валидация URL
+# [ТРЕБОВАНИЕ КЕЙСА]: Инициализация БД и валидация URL при старте
 @app.on_event("startup")
 def startup_event():
     init_db()
@@ -131,7 +131,7 @@ def analytics_endpoint():
 
 @app.post("/api/generate")
 async def generate_framework_endpoint(req: GenerateRequest):
-    """Шаг 1: Прием запроса и генерация каркаса (Асинхронно)."""
+    """Шаг 1: Прием запроса и генерация каркаса."""
     return await process_request(
         topic=req.topic, 
         hours=req.hours, 
@@ -142,12 +142,12 @@ async def generate_framework_endpoint(req: GenerateRequest):
 
 @app.post("/api/revise/{session_id}")
 async def revise_endpoint(session_id: str, req: RevisionRequest):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка (Асинхронно)."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Точечная доработка каркаса."""
     return await revise_session(session_id, req.instruction)
 
 @app.post("/api/approve/{session_id}")
 async def approve_endpoint(session_id: str):
-    """Шаг 2: Human-in-the-loop. Асинхронная параллельная генерация."""
+    """Шаг 2: Human-in-the-loop. Асинхронная генерация контента."""
     return await approve_and_generate(session_id)
 
 @app.get("/api/report/{session_id}")
