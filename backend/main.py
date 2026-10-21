@@ -83,7 +83,11 @@ async def add_security_headers(request: Request, call_next):
 async def llm_exception_handler(request: Request, exc: LLMServiceError):
     return JSONResponse(
         status_code=exc.status_code,
-        content={"error": "LLM Error", "detail": exc.message}
+        content={
+            "status": "error",
+            "error_code": "LLM_SERVICE_ERROR",
+            "message": exc.message
+        }
     )
 
 # [ТРЕБОВАНИЕ КЕЙСА]: Валидация URL моделей при старте
