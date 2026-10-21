@@ -6,6 +6,8 @@ class Competency(BaseModel):
     name: str = Field(..., description="Название компетенции")
     knowledge: List[str] = Field(..., min_items=1)
     skills: List[str] = Field(..., min_items=1)
+    # [ТРЕБОВАНИЕ КЕЙСА]: Связь с темами
+    related_topics: List[str] = Field(default_factory=list, description="Темы модулей, где формируется компетенция")
 
 class Module(BaseModel):
     title: str = Field(..., min_length=3)

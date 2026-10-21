@@ -44,6 +44,31 @@ async def global_exception_handler(request: Request, exc: Exception):
         }
     )
 
+# [ТРЕБОВАНИЕ КЕЙСА]: Единый формат для ошибок валидации Pydantic
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "status": "error",
+            "error_code": "VALIDATION_ERROR",
+            "message": "Неверный формат входных данных",
+            "details": exc.errors()
+        }
+    )
+
+# [ТРЕБОВАНИЕ КЕЙСА]: Единый формат для HTTP-ошибок (404, 400 и т.д.)
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "status": "error",
+            "error_code": f"HTTP_{exc.status_code}",
+            "message": exc.detail
+        }
+    )
+
 # [ТРЕБОВАНИЕ КЕЙСА]: Security Headers
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
