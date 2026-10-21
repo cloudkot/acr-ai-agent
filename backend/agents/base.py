@@ -1,19 +1,17 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Dict, Any
 
 class BaseAgent(ABC):
     """
-    [АРХИТЕКТУРА]: Базовый класс для всех навыков (по принципу GigaCowork).
-    Каждый агент имеет имя, описание и метод execute.
+    [ФИКС АРХИТЕКТУРЫ]: Базовый класс для всех навыков.
+    Метод execute теперь асинхронный (async def), чтобы соответствовать 
+    реальным реализациям в дочерних классах и не нарушать полиморфизм.
     """
     def __init__(self, name: str, description: str):
         self.name = name
         self.description = description
 
     @abstractmethod
-    def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Выполняет логику навыка.
-        Принимает контекст (state), возвращает обновленный контекст.
-        """
+    async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Выполняет логику навыка асинхронно."""
         pass

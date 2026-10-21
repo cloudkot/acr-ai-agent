@@ -68,28 +68,30 @@ class RevisionSkill(BaseAgent):
         return context
 
 # ==========================================
-# [АРХИТЕКТУРА]: Оркестратор
+# [ФИКС АРХИТЕКТУРЫ]: Оркестратор с реестром
 # ==========================================
 
 class AgentOrchestrator:
     """
-    Центральный диспетчер. Управляет контекстом и передает его 
-    между независимыми асинхронными навыками.
+    Центральный диспетчер с динамическим реестром навыков.
+    Позволяет добавлять новые навыки без изменения кода оркестратора 
+    (закрыт для модификации, открыт для расширения).
     """
     def __init__(self):
-        self.curriculum_skill = CurriculumSkill()
-        self.content_skill = ContentSkill()
-        self.revision_skill = RevisionSkill()
+        # Реестр навыков (Dependency Injection)
+        self.skills: Dict[str, BaseAgent] = {
+            "curriculum": CurriculumSkill(),
+            "content": ContentSkill(),
+            "revision": RevisionSkill()
+        }
 
     async def run_generate_pipeline(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        # 1. Генерация каркаса
-        context = await self.curriculum_skill.execute(context)
+        # Вызов навыка через реестр
+        context = await self.skills["curriculum"].execute(context)
         
-        # 2. Автокоррекция и валидация
         context["framework"] = auto_correct_hours(context["framework"], context["hours"], context.get("constraints"))
         report = run_full_validation(context["framework"])
         
-        # 3. Сохранение состояния (асинхронно)
         await save_session(
             context["session_id"], context["framework"], "waiting_for_approval", 
             constraints=context.get("constraints"), tokens_used=context["tokens"], cost_rub=context["cost"]
@@ -105,7 +107,6 @@ class AgentOrchestrator:
         }
 
     async def run_content_pipeline(self, session_id: str) -> Dict[str, Any]:
-        # [ФИКС]: Асинхронное получение сессии
         session = await get_session(session_id)
         if not session or session["status"] != "waiting_for_approval":
             return {"error": "Сессия не найдена или уже обработана"}
@@ -118,14 +119,12 @@ class AgentOrchestrator:
             "cost": session.get("cost_rub", 0.0)
         }
         
-        # Генерация контента (гранулярная)
-        context = await self.content_skill.execute(context)
+        # Вызов навыка через реестр
+        context = await self.skills["content"].execute(context)
         
-        # Принудительная валидация ограничений
         context["content"] = enforce_content_constraints(context["framework"], context["content"], context.get("constraints"))
         constraints_report = check_content_constraints(context["framework"], context["content"], context.get("constraints"))
         
-        # Сохранение результата (асинхронно)
         await save_session(
             session_id, context["framework"], "completed", 
             content=context["content"], constraints=context.get("constraints"),
@@ -145,7 +144,6 @@ class AgentOrchestrator:
         }
 
     async def run_revision_pipeline(self, session_id: str, instruction: str) -> Dict[str, Any]:
-        # [ФИКС]: Асинхронное получение сессии
         session = await get_session(session_id)
         if not session:
             return {"error": "Сессия не найдена"}
@@ -158,9 +156,9 @@ class AgentOrchestrator:
             "cost": session.get("cost_rub", 0.0)
         }
         
-        context = await self.revision_skill.execute(context)
+        # Вызов навыка через реестр
+        context = await self.skills["revision"].execute(context)
         
-        # [ФИКС]: Асинхронное сохранение
         await save_session(
             session_id, context["framework"], "waiting_for_approval", 
             constraints=session.get("constraints"),
