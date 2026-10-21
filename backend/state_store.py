@@ -6,14 +6,10 @@ from logger import logger
 DB_PATH = "sessions.db"
 
 def init_db():
-    """
-    [ТРЕБОВАНИЕ КЕЙСА]: Инициализация персистентного хранилища.
-    Создает таблицы сессий и аудита, а также выполняет миграции для новых колонок.
-    """
+    """[ТРЕБОВАНИЕ КЕЙСА]: Инициализация персистентного хранилища."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Таблица сессий (включает аналитику и ограничения)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY, 
@@ -26,7 +22,6 @@ def init_db():
         )
     ''')
     
-    # Таблица аудита (логи действий)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS audit_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,17 +31,13 @@ def init_db():
         )
     ''')
     
-    # [АРХИТЕКТУРА]: Безопасная миграция для существующих баз данных
-    migrations = [
-        "constraints TEXT", 
-        "tokens_used INTEGER DEFAULT 0", 
-        "cost_rub REAL DEFAULT 0.0"
-    ]
+    # Миграции
+    migrations = ["constraints TEXT", "tokens_used INTEGER DEFAULT 0", "cost_rub REAL DEFAULT 0.0"]
     for col in migrations:
         try:
             cursor.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
         except sqlite3.OperationalError:
-            pass # Колонка уже существует, миграция не требуется
+            pass
             
     conn.commit()
     conn.close()
@@ -60,7 +51,7 @@ def save_session(
     tokens_used: int = 0,
     cost_rub: float = 0.0
 ):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Сохранение состояния сессии и метрик расхода."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Сохранение состояния сессии и метрик."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     content_str = json.dumps(content, ensure_ascii=False) if content else None
@@ -74,7 +65,7 @@ def save_session(
     conn.close()
 
 def get_session(session_id: str) -> dict:
-    """[ТРЕБОВАНИЕ КЕЙСА]: Восстановление полного контекста сессии из БД."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Восстановление контекста сессии."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -96,7 +87,7 @@ def get_session(session_id: str) -> dict:
     return None
 
 def log_action(session_id: str, action: str):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Аудит действий (генерация, утверждение, правка)."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Аудит действий."""
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.execute('INSERT INTO audit_logs (session_id, action) VALUES (?, ?)', (session_id, action))
@@ -107,8 +98,8 @@ def log_action(session_id: str, action: str):
 
 def get_analytics() -> dict:
     """
-    [УНИКАЛЬНАЯ ФИЧА]: Сбор метрик для дашборда (экономическая эффективность).
-    Вызывается из эндпоинта /api/analytics.
+    [УНИКАЛЬНАЯ ФИЧА]: Сбор реальной статистики из БД.
+    Убрана оценка сэкономленных часов, оставлены только факты.
     """
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -118,7 +109,7 @@ def get_analytics() -> dict:
         cursor.execute("SELECT COUNT(*) FROM sessions WHERE status = 'completed'")
         completed = cursor.fetchone()[0]
         
-        # Считаем суммарно потраченные токены и рубли
+        # Суммарно потраченные токены и рубли
         cursor.execute("SELECT SUM(tokens_used), SUM(cost_rub) FROM sessions WHERE status = 'completed'")
         sums = cursor.fetchone()
         total_tokens = sums[0] if sums[0] else 0
@@ -128,9 +119,6 @@ def get_analytics() -> dict:
         
         return {
             "completed_programs": completed,
-            # Оценка экономии: 1 программа = 40 часов работы методиста
-            "estimated_hours_saved": completed * 40,
-            # Общая стоимость генерации в рублях
             "total_cost_rub": round(total_cost, 2),
             "total_tokens_used": total_tokens
         }
@@ -138,7 +126,6 @@ def get_analytics() -> dict:
         logger.error(f"Ошибка получения аналитики: {e}")
         return {
             "completed_programs": 0, 
-            "estimated_hours_saved": 0, 
             "total_cost_rub": 0.0,
             "total_tokens_used": 0
         }
