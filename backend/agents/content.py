@@ -6,7 +6,8 @@ from schemas import Framework
 from utils.json_parser import extract_json_from_text
 from logger import logger
 
-MAX_CONCURRENT_REQUESTS = 5
+# [ФИКС]: Снижаем до 3, чтобы виртуалка не падала по памяти (OOM Killed)
+MAX_CONCURRENT_REQUESTS = 3
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 async def _generate_async_retry(prompt: str, task_type: str = "content", retries: int = 3) -> tuple[any, int, float]:
@@ -23,19 +24,14 @@ async def _generate_async_retry(prompt: str, task_type: str = "content", retries
                 return data, total_tokens, total_cost
             except Exception as e:
                 logger.warning(f"Ошибка генерации ({attempt+1}/{retries}): {e}")
-                if attempt == retries - 1: 
-                    logger.error(f"Итоговый сбой после {retries} попыток: {e}")
-                    raise RuntimeError(f"Сбой: {e}")
-                await asyncio.sleep(2)
+                if attempt == retries - 1: raise RuntimeError(f"Сбой: {e}")
+                await asyncio.sleep(3)
 
+# Заглушки (оставляем как есть, они хорошие)
 def _fallback_seminar(framework: Framework, mod_title: str, mod_hours: int) -> dict:
     comps = [c.name for c in framework.competencies if any(mod_title.lower() in t.lower() for t in c.related_topics)]
     task = f"Разработать практический кейс по модулю '{mod_title}' ({mod_hours} ч.). Отработать навыки: {', '.join(comps) if comps else 'основные инструменты'}."
-    return {
-        "module_title": mod_title, "task": task,
-        "criteria": "Критерии: 1) Работоспособность; 2) Соответствие ТЗ; 3) Защита.",
-        "related_competency": comps[0] if comps else "Общая"
-    }
+    return {"module_title": mod_title, "task": task, "criteria": "Критерии: 1) Работоспособность; 2) Соответствие ТЗ; 3) Защита.", "related_competency": comps[0] if comps else "Общая"}
 
 def _fallback_lecture(framework: Framework, mod_title: str) -> dict:
     title_clean = mod_title.replace("Модуль", "").strip()
@@ -72,7 +68,9 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     constraints_context = f"<constraints>{constraints}</constraints>" if constraints else ""
 
     total_hours = framework.total_hours
-    target_q = max(10, total_hours // 24)
+    
+    # [ФИКС]: 1 вопрос на каждые 15 часов (для 500 ч = 33 вопроса)
+    target_q = max(10, total_hours // 15)
     if constraints:
         match = re.search(r'(\d+)\s*(вопрос|тест|задани)', constraints.lower())
         if match: target_q = int(match.group(1))
@@ -87,8 +85,8 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     async def fetch_tests_batch(batch_size: int, part_num: int):
         prompt = f"""
         <role>Тестолог.</role><context>{base_json}</context>{constraints_context}
-        <task>Составь ровно {batch_size} РАЗНЫХ тестовых вопросов (часть {part_num}). Один вопрос должен проверять одну конкретную компетенцию.</task>
-        <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown. Вопросы должны быть уникальными и специфичными.</rules>
+        <task>Составь ровно {batch_size} РАЗНЫХ тестовых вопросов (часть {part_num}). Вопросы должны быть сложными и специфичными.</task>
+        <rules>Верни ТОЛЬКО JSON-массив. Никакого markdown. correct_answer должен быть строкой из options.</rules>
         <format>[{{"question":"...", "options":["1","2","3","4"], "correct_answer":"1", "related_competency":"..."}}]</format>
         """
         try:
@@ -100,11 +98,12 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         except Exception: return []
 
     async def fetch_single_lecture(mod_title: str):
+        # [ФИКС]: Просим развернутые абзацы, а не просто заголовки
         prompt = f"""
         <role>Лектор.</role><context>{base_json}</context>{constraints_context}
-        <task>Составь план лекций для модуля "{mod_title}". Напиши 4-5 конкретных технических тезисов.</task>
+        <task>Составь подробный план лекции для модуля "{mod_title}". Напиши 3-4 тезиса, каждый из которых состоит из 2-3 предложений. Раскрой конкретные технологии и методы.</task>
         <rules>Верни ТОЛЬКО JSON-массив из одного объекта. Поле module_title должно быть ровно "{mod_title}".</rules>
-        <format>[{{"module_title":"{mod_title}", "theses":["Конкретный технический тезис 1", "Тезис 2"]}}]</format>
+        <format>[{{"module_title":"{mod_title}", "theses":["Подробный тезис с объяснением 1...", "Подробный тезис 2..."]}}]</format>
         """
         try:
             data, t, c = await _generate_async_retry(prompt, "content")
@@ -117,7 +116,7 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     async def fetch_single_seminar(mod_title: str, mod_hours: int):
         prompt = f"""
         <role>Практик.</role><context>{base_json}</context>{constraints_context}
-        <task>Составь ОДНО практическое задание для модуля "{mod_title}" ({mod_hours} ч.). Опиши конкретный кейс.</task>
+        <task>Составь ОДНО практическое задание (кейс) для модуля "{mod_title}" ({mod_hours} ч.). Опиши конкретную ситуацию, проблему и шаги решения.</task>
         <rules>Верни ТОЛЬКО JSON-массив из одного объекта. Поле module_title должно быть ровно "{mod_title}".</rules>
         <format>[{{"module_title":"{mod_title}", "task":"...", "criteria":"...", "related_competency":"..."}}]</format>
         """
@@ -147,7 +146,7 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     async def fetch_single_work_program(mod_title: str):
         prompt = f"""
         <role>Методист.</role><context>{base_json}</context>{constraints_context}
-        <task>Рабочая программа для модуля "{mod_title}". Напиши 2-3 предложения о содержании.</task>
+        <task>Рабочая программа для модуля "{mod_title}". Напиши 3-4 предложения о том, что будет изучено и какие практические навыки будут получены.</task>
         <rules>Верни ТОЛЬКО JSON-массив из одного объекта. Поле module_title должно быть ровно "{mod_title}".</rules>
         <format>[{{"module_title":"{mod_title}", "description":"..."}}]</format>
         """
@@ -162,7 +161,7 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     async def fetch_bibliography():
         prompt = f"""
         <role>Библиотекарь.</role><context>{base_json}</context>{constraints_context}
-        <task>Список 5 конкретных книг.</task>
+        <task>Список 5-7 конкретных книг или статей.</task>
         <rules>Верни ТОЛЬКО JSON-массив строк.</rules>
         <format>["Автор. Название. Год."]</format>
         """
@@ -184,12 +183,10 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
         questions_left -= take
         part += 1
 
-    # Для каждого модуля создаем ОТДЕЛЬНЫЕ задачи
     lecture_tasks = [fetch_single_lecture(mod.title) for mod in framework.modules]
     seminar_tasks = [fetch_single_seminar(mod.title, mod.total_hours) for mod in framework.modules]
     wp_tasks = [fetch_single_work_program(mod.title) for mod in framework.modules]
     
-    # Слайды зависят от ограничений
     slide_tasks = []
     if constraints and ("pandas" in constraints.lower()):
         slide_tasks = [fetch_single_slides(mod.title) for mod in framework.modules if "pandas" in mod.title.lower()]
@@ -200,7 +197,7 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
 
     all_tasks = test_tasks + lecture_tasks + seminar_tasks + wp_tasks + slide_tasks + [fetch_bibliography()]
     
-    logger.info(f"Запуск {len(all_tasks)} детализированных запросов (семафор {MAX_CONCURRENT_REQUESTS})...")
+    logger.info(f"Запуск {len(all_tasks)} задач (семафор {MAX_CONCURRENT_REQUESTS})...")
     results = await asyncio.gather(*all_tasks, return_exceptions=True)
 
     # Сборка результатов
@@ -231,13 +228,12 @@ async def generate_content_pack(framework: Framework, constraints: str = None) -
     bib_res = results[idx]
     if isinstance(bib_res, list): all_bibliography.extend(bib_res)
 
-    # --- СКЛЕЙКА (Заглушки, если что-то упало) ---
+    # --- СКЛЕЙКА ---
     final_tests = all_tests[:target_q]
     while len(final_tests) < target_q:
         mod_title = framework.modules[len(final_tests) % len(framework.modules)].title if framework.modules else "программе"
         final_tests.append(_fallback_test(framework, len(final_tests) + 1, mod_title))
 
-    # Добиваем лекции и семинары, если их нет
     for mod in framework.modules:
         if not any(mod.title.lower() in l.get("module_title", "").lower() for l in final_lectures):
             final_lectures.append(_fallback_lecture(framework, mod.title))
