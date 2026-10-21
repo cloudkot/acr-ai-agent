@@ -12,7 +12,9 @@ from state_store import get_session, init_db, get_analytics
 from export import export_to_docx, export_to_pptx, export_tests_to_lms, export_to_json, export_tests_to_moodle_xml
 from services.reference_parser import save_and_parse_reference
 from agents.validator import run_full_validation, validate_coverage_with_content, check_content_constraints
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from schemas import GenerateRequest, RevisionRequest
+from fastapi.exceptions import RequestValidationError
 from cloud import LLMServiceError
 
 app = FastAPI(title="ACR AI Agent", version="1.0.0")
