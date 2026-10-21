@@ -12,7 +12,8 @@ if not any(domain in parsed_url.netloc for domain in ALLOWED_DOMAINS):
     raise ValueError(f"КРИТИЧЕСКАЯ ОШИБКА: Запрещенный провайдер LLM ({base_url}).")
 
 api_key = os.getenv("OPENAI_API_KEY", "")
-client = OpenAI(api_key=api_key or "dummy", base_url=base_url, timeout=120.0)
+# Увеличен таймаут до 180 секунд, так как программы на 500 часов генерируются дольше
+client = OpenAI(api_key=api_key or "dummy", base_url=base_url, timeout=180.0)
 
 MODEL_FAST = "GigaChat/GigaChat-3-Pro"
 MODEL_REASONING = "ai-sage/GigaChat3.5-432B-A28B-Reasoning"
@@ -36,17 +37,17 @@ class LLMRouter:
             return MODEL_REASONING
         return MODEL_FAST
 
-def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False, token_limit: int = 50000) -> tuple[str, int, float]:
+def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False, token_limit: int = 100000) -> tuple[str, int, float]:
     """
-    [ТРЕБОВАНИЕ КЕЙСА]: Возвращает кортеж (текст_ответа, потрачено_токенов, стоимость_в_рублях).
-    Добавлена проверка лимита токенов.
+    [ТРЕБОВАНИЕ КЕЙСА]: Возвращает (текст, токены, стоимость).
+    [ФИКС МАСШТАБА]: max_tokens увеличен до 8000 для генерации больших программ (500 часов).
     """
     model = LLMRouter.get_model_for_task(task_type)
     
     kwargs = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 4000
+        "max_tokens": 8000  # <--- Увеличен лимит вывода (было 4000)
     }
     if is_json:
         kwargs["response_format"] = {"type": "json_object"}
@@ -73,7 +74,6 @@ def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False, toke
             
             print(f"[LLM STATS] {model} | Токенов: {usage.total_tokens} | Стоимость: {total_cost:.4f} руб.")
             
-            # Возвращаем текст, токены и стоимость
             return content, usage.total_tokens, total_cost
             
         except (APITimeoutError, APIConnectionError) as e:
