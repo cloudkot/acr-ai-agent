@@ -5,20 +5,20 @@ from schemas import Framework, ExecutionPlan
 from utils.json_parser import extract_json_from_text
 from logger import logger
 
-# [ФИКС]: Усиленный системный промпт, так как мы отключили принудительный JSON на уровне API
+# [ФИКС]: Системный промпт для Планировщика
 SYSTEM_PROMPT_PLANNER = """
 Ты — строгий программный API. Твоя задача — вернуть валидный JSON-объект с планом задач.
 КРИТИЧЕСКИЕ ПРАВИЛА:
 1. Возвращай ТОЛЬКО JSON. Никакого текста до или после.
 2. Не используй markdown-разметку (без ```json).
-3. Не добавляй комментарии.
-4. Формат: {"reasoning": "строка", "tasks": [{"target_key": "строка", "expected_format": "json_array", "prompt": "строка"}]}
+3. Каждая задача должна иметь поля: target_key, expected_format, prompt, module_title.
+4. В поле "prompt" пиши обычный текст. ЗАПРЕЩЕНО использовать вложенные объекты и словари.
 """
 
 async def create_execution_plan(framework: Framework, constraints: str = None) -> tuple[ExecutionPlan, int, float]:
     """
     [НОВАЯ АРХИТЕКТУРА]: LLM-Планировщик.
-    Генерирует задачи (1 модуль = 1 задача).
+    Генерирует задачи (1 модуль = 1 задача) с указанием module_title.
     """
     logger.info("Запуск LLM-планировщика...")
     
@@ -35,7 +35,8 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
     <rules>
     1. Разбей генерацию на подзадачи для воркеров.
     2. КРИТИЧЕСКИ ВАЖНО: Делай ОТДЕЛЬНУЮ задачу для КАЖДОГО модуля (в программе {modules_count} модулей). Не объединяй.
-    3. В поле "prompt" пиши обычный текст. ЗАПРЕЩЕНО использовать вложенные объекты и словари. Только массивы строк или простые строки.
+    3. ОБЯЗАТЕЛЬНО передавай точное название модуля в поле "module_title".
+    4. В поле "prompt" пиши обычный текст. Только массивы строк или простые строки.
     </rules>
     
     <example_format>
@@ -45,7 +46,8 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
         {{
           "target_key": "lectures",
           "expected_format": "json_array",
-          "prompt": "Ты — лектор. Составь план лекции для модуля 'Введение'. Верни JSON-массив из одного объекта с полями: module_title (строка), theses (массив строк)."
+          "module_title": "Введение в DevOps",
+          "prompt": "Ты — лектор. Составь план лекции для модуля 'Введение в DevOps'. Верни JSON-массив из одного объекта с полями: module_title (строка), theses (массив строк)."
         }}
       ]
     }}
@@ -56,7 +58,7 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
     total_cost = 0.0
 
     try:
-        # [ФИКС]: Отключили is_json=True (так как API больше не поддерживает этот флаг)
+        # [ФИКС]: Отключили принудительный JSON на уровне API
         raw, tokens, cost = await ask_llm(
             prompt=prompt, 
             system_prompt=SYSTEM_PROMPT_PLANNER,
@@ -66,7 +68,6 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
         total_tokens += tokens
         total_cost += cost
         
-        # [ФИКС]: extract_json_from_text вытащит JSON даже из markdown-обертки
         data = extract_json_from_text(raw)
         plan = ExecutionPlan(**data)
         
@@ -84,6 +85,7 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
             fallback_tasks.append({
                 "target_key": "tests",
                 "expected_format": "json_array",
+                "module_title": "Общий",
                 "prompt": f"Составь 5 тестовых вопросов (часть {i+1}) по программе '{framework.goal[:50]}'. Верни ТОЛЬКО JSON-массив. В каждом объекте поля: question, options (массив из 4 строк), correct_answer, related_competency."
             })
             
@@ -93,18 +95,21 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
             fallback_tasks.append({
                 "target_key": "lectures",
                 "expected_format": "json_array",
+                "module_title": mod.title,
                 "prompt": f"Составь подробный план лекции для модуля '{mod.title}' ({mod.total_hours} часов). Верни ТОЛЬКО JSON-массив из одного объекта с полями: module_title (строка), theses (массив строк)."
             })
             # Семинары
             fallback_tasks.append({
                 "target_key": "seminars",
                 "expected_format": "json_array",
+                "module_title": mod.title,
                 "prompt": f"Составь практический кейс для модуля '{mod.title}' ({mod.total_hours} часов). Верни ТОЛЬКО JSON-массив из одного объекта с полями: module_title (строка), task (строка), criteria (строка), related_competency (строка)."
             })
             # Рабочие программы
             fallback_tasks.append({
                 "target_key": "work_programs",
                 "expected_format": "json_array",
+                "module_title": mod.title,
                 "prompt": f"Напиши рабочую программу (3-4 предложения) для модуля '{mod.title}'. Верни ТОЛЬКО JSON-массив из одного объекта с полями: module_title (строка), description (строка с обычным текстом)."
             })
 
@@ -120,6 +125,7 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
             fallback_tasks.append({
                 "target_key": "slides",
                 "expected_format": "json_array",
+                "module_title": mod.title,
                 "prompt": f"Составь 3 слайда для модуля '{mod.title}'. Верни ТОЛЬКО JSON-массив объектов с полями: slide_type (строка), title (строка), bullets (массив строк), speaker_notes (строка)."
             })
 
@@ -127,11 +133,12 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
         fallback_tasks.append({
             "target_key": "bibliography",
             "expected_format": "json_array",
+            "module_title": "Общий",
             "prompt": f"Составь список из 5 реальных книг для программы '{framework.goal[:50]}'. Верни ТОЛЬКО JSON-массив строк в формате 'Автор. Название. Год.'."
         })
 
         fallback_plan = ExecutionPlan(
             reasoning="Fallback-план: плоский JSON, 1 задача = 1 модуль",
-            tasks=[{"target_key": t["target_key"], "prompt": t["prompt"], "expected_format": t["expected_format"]} for t in fallback_tasks]
+            tasks=[{"target_key": t["target_key"], "prompt": t["prompt"], "expected_format": t["expected_format"], "module_title": t["module_title"]} for t in fallback_tasks]
         )
         return fallback_plan, total_tokens, total_cost
