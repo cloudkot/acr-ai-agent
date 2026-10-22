@@ -2,6 +2,7 @@ import os
 import asyncio
 from urllib.parse import urlparse
 from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, RateLimitError
+from typing import Optional
 
 # [ТРЕБОВАНИЕ КЕЙСА]: Жесткая фиксация провайдера (только Cloud.ru)
 ALLOWED_DOMAINS = ["gigaschool.ru", "cloud.ru", "sber.ru"]
@@ -38,26 +39,32 @@ class LLMRouter:
 
 async def ask_llm(
     prompt: str, 
+    system_prompt: str = None,
     task_type: str = "content", 
     is_json: bool = False
 ) -> tuple[str, int, float]:
     """
-    [ТРЕБОВАНИЕ КЕЙСА]: Асинхронный вызов LLM.
-    [ФИКС]: Убрали сложный json_schema, оставили базовый json_object.
-    Добавили экспоненциальную задержку при Rate Limit (429).
+    [УЛУЧШЕНИЕ]: Разделяем System Prompt и User Prompt.
+    Это заставляет модель строго следовать формату (JSON, без markdown).
     """
     model = LLMRouter.get_model_for_task(task_type)
     
+    # [ФИКС]: Формируем массив сообщений с системным промптом
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+    
     kwargs = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "max_tokens": 8000
     }
     
     if is_json:
         kwargs["response_format"] = {"type": "json_object"}
 
-    for attempt in range(4): # 4 попытки
+    for attempt in range(4):
         try:
             response = await client.chat.completions.create(**kwargs)
             content = response.choices[0].message.content
@@ -76,7 +83,6 @@ async def ask_llm(
             return content, usage.total_tokens, total_cost
             
         except RateLimitError as e:
-            # [ФИКС]: Если сработал Rate Limit (превышение запросов в минуту)
             wait_time = (attempt + 1) * 5
             print(f"[WARNING] Rate Limit! Ждем {wait_time} секунд...")
             if attempt == 3: raise LLMServiceError(f"Rate Limit: {str(e)}", status_code=429)

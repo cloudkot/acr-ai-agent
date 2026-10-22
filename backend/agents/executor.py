@@ -17,6 +17,17 @@ from logger import logger
 MAX_CONCURRENT_REQUESTS = config.MAX_CONCURRENT_REQUESTS
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
+# [ФИКС]: Жесткий системный промпт для всех воркеров
+SYSTEM_PROMPT_JSON = """
+Ты — программный API. Твоя единственная задача — возвращать валидный JSON.
+СТРОГИЕ ПРАВИЛА:
+1. Возвращай ТОЛЬКО JSON. Никакого текста до или после.
+2. Не используй markdown-разметку (без ```json).
+3. Не добавляй комментарии внутри JSON.
+4. Строго соблюдай запрошенные поля. Если просят массив — возвращай массив. Если объект — объект.
+5. Не придумывай вложенные структуры, если об этом не просили.
+"""
+
 def _extract_list_from_response(data: any) -> list:
     if isinstance(data, list):
         return data
@@ -28,10 +39,16 @@ def _extract_list_from_response(data: any) -> list:
     return []
 
 async def _execute_single_task(task) -> tuple[any, any, int, float, bool]:
-    """[ФИКС]: Возвращаем сам объект task, чтобы не терять задачи в очереди."""
+    """[ФИКС]: Выполняет задачу с использованием System Prompt."""
     async with semaphore:
         try:
-            raw, tokens, cost = await ask_llm(task.prompt, task_type="content", is_json=True)
+            # [УЛУЧШЕНИЕ]: Передаем system_prompt
+            raw, tokens, cost = await ask_llm(
+                prompt=task.prompt, 
+                system_prompt=SYSTEM_PROMPT_JSON,
+                task_type="content", 
+                is_json=True
+            )
             data = extract_json_from_text(raw)
             return task, data, tokens, cost, True
         except Exception as e:
@@ -103,7 +120,6 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
             elif key == "seminars":
                 final_content[key].extend(validate_seminar_format(items))
             elif key == "work_programs":
-                # [ФИКС]: Если нейросеть выдала сложный объект, просто превращаем его в текст
                 for item in items:
                     if isinstance(item, dict):
                         mod_title = item.get("module_title", "Модуль")
@@ -157,5 +173,4 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
     if not final_content["bibliography"]:
         final_content["bibliography"] = _rule_based_fallback_bibliography(framework)
 
-    # [ФИКС]: Убрали жесткую валидацию ContentPack, которая уничтожала данные.
     return final_content, total_tokens, total_cost
