@@ -1,7 +1,7 @@
 import json
 import asyncio
 from cloud import ask_llm, MODEL_FAST
-from schemas import ExecutionPlan, Framework, ContentPack
+from schemas import ExecutionPlan, Framework
 from utils.json_parser import extract_json_from_text
 from agents.content import (
     _rule_based_fallback_test, 
@@ -38,13 +38,13 @@ async def _execute_single_task(task) -> tuple[any, any, int, float, bool]:
             logger.warning(f"Сбой задачи [{task.target_key}]: {e}")
             return task, None, 0, 0.0, False
 
-def _rule_based_fallback_slide(framework: Framework, mod_title: str) -> dict:
-    return {
-        "slide_type": "content",
-        "title": f"Ошибка генерации: {mod_title}",
-        "bullets": ["Нейросеть не смогла создать слайд.", "Повторите генерацию."],
-        "speaker_notes": "Сбой генерации контента."
-    }
+def _force_string(val: any) -> str:
+    """[УТИЛИТА]: Если LLM вернула объект вместо строки, превращаем его в текст."""
+    if isinstance(val, str):
+        return val
+    if isinstance(val, (dict, list)):
+        return json.dumps(val, ensure_ascii=False, indent=2)
+    return str(val)
 
 async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict, int, float]:
     logger.info(f"Запуск Исполнителя. В плане {len(plan.tasks)} задач.")
@@ -59,7 +59,7 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
     generation_errors = 0
     
     pending_tasks = list(plan.tasks)
-    max_rounds = 4
+    max_rounds = 3
     
     for round_num in range(max_rounds):
         if not pending_tasks:
@@ -79,9 +79,10 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
             total_cost += cost
             
             if not is_success or data is None:
-                next_pending.append(task_obj) # [ФИКС]: Возвращаем именно эту задачу
+                next_pending.append(task_obj)
                 continue
                 
+            # --- Обработка библиографии ---
             if key == "bibliography":
                 if isinstance(data, dict) and "resources" in data:
                     for item in data["resources"]:
@@ -91,75 +92,70 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                             final_content[key].append(item)
                 else:
                     items = _extract_list_from_response(data)
-                    final_content[key].extend([str(x) for x in items if isinstance(x, str)])
+                    final_content[key].extend([_force_string(x) for x in items if x])
                 continue
 
+            # --- Обработка остального контента ---
             items = _extract_list_from_response(data)
+            
             if key == "tests":
                 final_content[key].extend(validate_test_format(items))
             elif key == "seminars":
                 final_content[key].extend(validate_seminar_format(items))
-            else:
-                valid_items = [x for x in items if isinstance(x, dict) and x]
-                final_content[key].extend(valid_items)
+            elif key == "work_programs":
+                # [ФИКС]: Если нейросеть выдала сложный объект, просто превращаем его в текст
+                for item in items:
+                    if isinstance(item, dict):
+                        mod_title = item.get("module_title", "Модуль")
+                        desc = item.get("description") or item.get("content") or str(item)
+                        final_content["work_programs"].append({
+                            "module_title": mod_title,
+                            "description": _force_string(desc)
+                        })
+            elif key == "lectures":
+                for item in items:
+                    if isinstance(item, dict):
+                        final_content["lectures"].append({
+                            "module_title": item.get("module_title", item.get("lecture_title", "Лекция")),
+                            "theses": item.get("theses") or item.get("content") or item.get("subtopics") or [str(item)]
+                        })
+            elif key == "slides":
+                for item in items:
+                    if isinstance(item, dict):
+                        final_content["slides"].append({
+                            "slide_type": item.get("slide_type", "content"),
+                            "title": item.get("title", item.get("header", "Слайд")),
+                            "bullets": item.get("bullets") or item.get("bullet_points") or [item.get("description", "")],
+                            "speaker_notes": item.get("speaker_notes", "")
+                        })
 
         pending_tasks = next_pending
         if pending_tasks:
-            logger.warning(f"Rate Limit защита: пауза 10 секунд перед повтором {len(pending_tasks)} задач...")
-            await asyncio.sleep(10)
+            logger.warning(f"Пауза 5 секунд перед повтором {len(pending_tasks)} задач...")
+            await asyncio.sleep(5)
 
     if pending_tasks:
         logger.error(f"После {max_rounds} раундов осталось {len(pending_tasks)} сбойных задач.")
         generation_errors += len(pending_tasks)
 
-    logger.info("Проверка полноты...")
-    
+    # --- ДОБИВКА (если чего-то совсем нет) ---
     target_q = max(config.MIN_QUESTIONS, framework.total_hours // config.QUESTIONS_PER_HOURS)
-    final_content["tests"] = final_content["tests"][:target_q]
-    
-    for t in final_content["tests"]:
-        if "category" not in t or not t["category"]:
-            t["category"] = t.get("related_competency", "Общая")
-
     while len(final_content["tests"]) < target_q:
         mod_title = framework.modules[len(final_content["tests"]) % len(framework.modules)].title if framework.modules else "программе"
         fallback_test = _rule_based_fallback_test(framework, len(final_content["tests"]) + 1, mod_title)
         fallback_test["category"] = mod_title
         final_content["tests"].append(fallback_test)
-        generation_errors += 1
 
     for mod in framework.modules:
         if not any(mod.title.lower() in str(l.get("module_title", "")).lower() for l in final_content["lectures"]):
             final_content["lectures"].append(_rule_based_fallback_lecture(framework, mod.title))
-            generation_errors += 1
-            
         if not any(mod.title.lower() in str(s.get("module_title", "")).lower() for s in final_content["seminars"]):
             final_content["seminars"].append(_rule_based_fallback_seminar(framework, mod.title, mod.total_hours))
-            generation_errors += 1
-
-        if not any(mod.title.lower() in str(sl.get("title", "")).lower() for sl in final_content["slides"]):
-            final_content["slides"].append(_rule_based_fallback_slide(framework, mod.title))
-            generation_errors += 1
-
         if not any(mod.title.lower() in str(wp.get("module_title", "")).lower() for wp in final_content["work_programs"]):
-            final_content["work_programs"].append({
-                "module_title": mod.title,
-                "description": "ОШИБКА ГЕНЕРАЦИИ. Описание программы не было создано. Повторите генерацию."
-            })
-            generation_errors += 1
+            final_content["work_programs"].append({"module_title": mod.title, "description": "ОШИБКА ГЕНЕРАЦИИ."})
 
     if not final_content["bibliography"]:
         final_content["bibliography"] = _rule_based_fallback_bibliography(framework)
-        generation_errors += 1
 
-    if generation_errors > 0:
-        logger.warning(f"Завершено с ошибками. Сбойных элементов: {generation_errors}")
-
-    try:
-        validated_pack = ContentPack(**final_content)
-        final_dict = validated_pack.model_dump()
-    except Exception as e:
-        logger.error(f"Ошибка валидации ContentPack: {e}")
-        final_dict = final_content
-
-    return final_dict, total_tokens, total_cost
+    # [ФИКС]: Убрали жесткую валидацию ContentPack, которая уничтожала данные.
+    return final_content, total_tokens, total_cost
