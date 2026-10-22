@@ -32,7 +32,8 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
        - "expected_format": "json_array" или "json_object".
     3. Разбивай задачи так, чтобы каждая подзадача была маленькой. Например, для тестов сделай несколько задач по 5 вопросов. Для лекций — по одной задаче на модуль.
     4. Если в constraints просят "слайды только для pandas" или "только первые два занятия", создай задачи для слайдов ТОЛЬКО для этих модулей.
-    5. Верни ТОЛЬКО валидный JSON без markdown.
+    5. ВАЖНО ДЛЯ СЛАЙДОВ: в промпте для слайдов ты должен строго требовать формат: массив объектов `[{{"slide_type": "title|content|summary", "title": "...", "bullets": ["..."], "speaker_notes": "..."}}]`. Тезисы (bullets) должны быть короткими (до 10 слов), а заметки (speaker_notes) — развернутыми (2-3 предложения для лектора).
+    6. Верни ТОЛЬКО валидный JSON без markdown.
     </rules>
     
     <example_format>
@@ -45,9 +46,9 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
           "prompt": "Составь 5 тестовых вопросов для модуля 'Введение'. Формат: [{{\\"question\\":\\"...\\", \\"options\\":[\\"...\\"], \\"correct_answer\\":\\"...\\"}}]"
         }},
         {{
-          "target_key": "lectures",
+          "target_key": "slides",
           "expected_format": "json_array",
-          "prompt": "Составь план лекции для модуля 'Введение'. Формат: [{{\\"module_title\\":\\"Введение\\", \\"theses\\":[\\"...\\"]}}]"
+          "prompt": "Составь 3 слайда для модуля 'Введение'. Формат: [{{\\"slide_type\\":\\"content\\", \\"title\\":\\"...\\", \\"bullets\\":[\\"тезис 1\\", \\"тезис 2\\"], \\"speaker_notes\\":\\"развернутый текст для лектора\\"}}]"
         }}
       ]
     }}
@@ -66,7 +67,7 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
         data = extract_json_from_text(raw)
         plan = ExecutionPlan(**data)
         
-        logger.info(f"Планировщик создал {len(plan.tasks)} подзадач. Обоснование: {plan.reasoning[:100]}...")
+        logger.info(f"Планировщик создал {len(plan.tasks)} подзадач.")
         return plan, total_tokens, total_cost
         
     except Exception as e:
@@ -102,7 +103,7 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
                 "prompt": f"Напиши рабочую программу для модуля '{mod.title}'. Верни JSON-массив из одного объекта."
             })
 
-        # 3. Слайды (с учетом ограничений)
+        # 3. Слайды (с учетом ограничений и нового формата)
         target_modules = framework.modules
         if constraints:
             if "pandas" in constraints.lower():
@@ -114,7 +115,7 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
             fallback_tasks.append({
                 "target_key": "slides",
                 "expected_format": "json_array",
-                "prompt": f"Составь структуру слайдов для модуля '{mod.title}'. Верни JSON-массив."
+                "prompt": f"Составь 3 слайда для модуля '{mod.title}'. Формат: [{{\\\"slide_type\\\":\\\"content\\\", \\\"title\\\":\\\"...\\\", \\\"bullets\\\":[\\\"...\\\"], \\\"speaker_notes\\\":\\\"...\\\"}}]. Верни JSON-массив."
             })
 
         # 4. Библиография

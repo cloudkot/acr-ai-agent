@@ -6,6 +6,7 @@ from docx import Document
 from docx.shared import Pt, RGBColor, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from pptx import Presentation
+from pptx.util import Inches, Pt as PptxPt
 from schemas import Framework
 from logger import logger
 
@@ -43,7 +44,7 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
         doc.add_paragraph(f"Нормативная база: {framework.prof_standard}")
 
     if constraints_check and not constraints_check.get("constraints_ok", True):
-        doc.add_heading('⚠ ВНИМАНИЕ: Предупреждения по ограничениям', level=2)
+        doc.add_heading('ВНИМАНИЕ: Предупреждения по ограничениям', level=2)
         p = doc.add_paragraph()
         p.runs[0].font.color.rgb = RGBColor(255, 0, 0)
         p.add_run("Нейросеть не до конца выполнила требования методиста:\n")
@@ -112,7 +113,7 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
     for i, test in enumerate(content.get("tests", []), 1):
         doc.add_paragraph(f"Вопрос {i}: {test.get('question')}")
         for opt in test.get('options', []):
-            prefix = "✅ " if opt == test.get('correct_answer') else "○ "
+            prefix = "[+] " if opt == test.get('correct_answer') else "[ ] "
             doc.add_paragraph(f"{prefix}{opt}", style='List Bullet')
         doc.add_paragraph(f"Проверяемая компетенция: {test.get('related_competency', 'Не указана')}\n")
 
@@ -145,7 +146,6 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
     doc.add_paragraph("\n\nРазработчик программы: ____________________ / _________________ /")
     doc.add_paragraph("Согласовано: ____________________ / _________________ /")
     
-    # Добавляем метрику времени генерации в конец документа для ревьюера
     doc.add_paragraph(f"\n\n[Сгенерировано автоматически за {generation_time:.2f} секунд]").runs[0].font.size = Pt(8)
 
     doc.save(filename)
@@ -154,26 +154,74 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
 def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, constraints_check: dict = None):
     prs = Presentation()
     
-    # Титульный слайд
+    # 1. Титульный слайд
     slide = prs.slides.add_slide(prs.slide_layouts[0])
     slide.shapes.title.text = f"Программа: {framework.goal[:50]}..."
     slide.placeholders[1].text = f"Объем: {framework.total_hours} ч.\nТип: {framework.template_type}"
     
-    # Слайды из лекций (или fallback)
+    # 2. Слайд с предупреждениями (если есть)
+    if constraints_check and not constraints_check.get("constraints_ok", True):
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = "Внимание: Отклонения от ТЗ"
+        tf = slide.placeholders[1].text_frame
+        tf.text = "При генерации были нарушены ограничения:"
+        for err in constraints_check.get("errors", []):
+            p = tf.add_paragraph()
+            p.text = err
+            p.level = 1
+
+    # 3. Слайды из контента (используем новые типы слайдов)
     slides_data = content.get("slides", [])
+    
+    # Если слайдов нет, делаем fallback из лекций
     if not slides_data and content.get("lectures"):
-        slides_data = [{"slide_title": lec.get("module_title"), "module_title": lec.get("module_title"), "bullets": lec.get("theses", [])} for lec in content["lectures"]]
+        for lec in content["lectures"]:
+            slides_data.append({
+                "slide_type": "content",
+                "title": lec.get("module_title", "Лекция"),
+                "bullets": lec.get("theses", []),
+                "speaker_notes": "Описание лекции отсутствует."
+            })
 
     for slide_info in slides_data:
-        slide = prs.slides.add_slide(prs.slide_layouts[1])
-        slide.shapes.title.text = slide_info.get("slide_title", "Слайд")
-        tf = slide.placeholders[1].text_frame
-        tf.text = f"Модуль: {slide_info.get('module_title', '')}"
-        for bullet in slide_info.get("bullets", []):
-            p = tf.add_paragraph()
-            p.text = bullet
-            p.level = 1
-            
+        slide_type = slide_info.get("slide_type", "content")
+        title_text = slide_info.get("title", "Слайд")
+        bullets = slide_info.get("bullets", [])
+        notes_text = slide_info.get("speaker_notes", "")
+
+        # Выбор макета
+        if slide_type == "title":
+            slide = prs.slides.add_slide(prs.slide_layouts[0])
+            slide.shapes.title.text = title_text
+            if bullets:
+                slide.placeholders[1].text = bullets[0]
+        elif slide_type == "two_columns" and len(bullets) >= 2:
+            slide = prs.slides.add_slide(prs.slide_layouts[3]) # Two Content
+            slide.shapes.title.text = title_text
+            # Заполняем две колонки
+            tf_left = slide.placeholders[1].text_frame
+            tf_right = slide.placeholders[2].text_frame
+            mid = len(bullets) // 2
+            tf_left.text = bullets[0]
+            for b in bullets[1:mid]: tf_left.add_paragraph(b)
+            tf_right.text = bullets[mid]
+            for b in bullets[mid+1:]: tf_right.add_paragraph(b)
+        else:
+            # Обычный слайд (Title and Content)
+            slide = prs.slides.add_slide(prs.slide_layouts[1])
+            slide.shapes.title.text = title_text
+            tf = slide.placeholders[1].text_frame
+            if bullets:
+                tf.text = bullets[0]
+                for bullet in bullets[1:]:
+                    p = tf.add_paragraph()
+                    p.text = bullet
+                    p.level = 1
+                    
+        # Добавление заметок для лектора
+        if notes_text:
+            slide.notes_slide.notes_text_frame.text = notes_text
+
     prs.save(filename)
     return filename
 
@@ -220,10 +268,6 @@ def _export_to_json_sync(framework: Framework, content: dict, filename: str, con
     with open(filename, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
     return filename
-
-# ==========================================
-# Асинхронные обертки
-# ==========================================
 
 async def export_to_docx(framework: Framework, content: dict, filename: str, constraints_check: dict = None, generation_time: float = 0.0):
     return await asyncio.to_thread(_export_to_docx_sync, framework, content, filename, constraints_check, generation_time)

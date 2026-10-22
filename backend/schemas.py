@@ -25,9 +25,18 @@ class Framework(BaseModel):
     total_hours: int = Field(..., ge=16, le=500)
     final_assessment_hours: int = Field(default=2, ge=0)
 
-# [НОВАЯ АРХИТЕКТУРА]: Модели для LLM-планировщика
+# [НОВАЯ СХЕМА]: Заставляем ИИ генерировать структурированные слайды
+class Slide(BaseModel):
+    slide_type: Literal["title", "content", "two_columns", "summary"] = Field(
+        default="content", 
+        description="Тип слайда. title - титульный, content - обычный список, two_columns - два столбца, summary - итоги"
+    )
+    title: str = Field(..., description="Заголовок слайда")
+    bullets: List[str] = Field(default_factory=list, description="Тезисы для слайда (не более 5)")
+    speaker_notes: str = Field(default="", description="Текст для озвучивания лектором (то, что не видно на экране)")
+
 class SubTask(BaseModel):
-    target_key: str = Field(..., description="Ключ, куда сохранить результат (например, 'tests', 'seminars', 'lectures')")
+    target_key: str = Field(..., description="Ключ, куда сохранить результат (например, 'tests', 'seminars', 'lectures', 'slides')")
     prompt: str = Field(..., description="Готовый промпт для отправки в LLM")
     expected_format: str = Field(default="json_array", description="Ожидаемый формат ответа (json_array или json_object)")
 
