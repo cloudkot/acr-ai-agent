@@ -6,7 +6,12 @@ from schemas import Framework, Module, Competency
 from state_store import init_db
 
 client = TestClient(app)
-init_db()
+
+@pytest.fixture(autouse=True)
+def setup_db():
+    """[ФИКС]: Асинхронная инициализация БД для тестов."""
+    import asyncio
+    asyncio.run(init_db())
 
 # --- МОК-ДАННЫЕ ---
 MOCK_FRAMEWORK = Framework(
@@ -46,12 +51,25 @@ def test_generate_missing_hours(mock_clarify):
     assert response.json()["status"] == "clarification_needed"
     assert len(response.json()["questions"]) > 0
 
-@patch("agents.orchestrator.generate_framework_json", new_callable=AsyncMock)
-@patch("agents.orchestrator.generate_content_pack", new_callable=AsyncMock)
-def test_full_generate_approve_export_flow(mock_content, mock_framework):
+@patch("agents.curriculum.generate_framework_json", new_callable=AsyncMock)
+@patch("agents.content.generate_tests", new_callable=AsyncMock)
+@patch("agents.content.generate_lectures", new_callable=AsyncMock)
+@patch("agents.content.generate_seminars", new_callable=AsyncMock)
+@patch("agents.content.generate_slides", new_callable=AsyncMock)
+@patch("agents.content.generate_work_programs", new_callable=AsyncMock)
+@patch("agents.content.generate_bibliography", new_callable=AsyncMock)
+def test_full_generate_approve_export_flow(
+    mock_bib, mock_wp, mock_slides, mock_sem, mock_lec, mock_tests, mock_fw
+):
     """[ТРЕБОВАНИЕ КЕЙСА]: Сквозной сценарий (генерация -> утверждение -> экспорт)."""
-    mock_framework.return_value = (MOCK_FRAMEWORK, 100, 0.05)
-    mock_content.return_value = MOCK_CONTENT
+    # Настраиваем моки под новую архитектуру (возвращают кортежи: data, tokens, cost)
+    mock_fw.return_value = (MOCK_FRAMEWORK, 100, 0.05)
+    mock_tests.return_value = (MOCK_CONTENT["tests"], 50, 0.02)
+    mock_lec.return_value = (MOCK_CONTENT["lectures"], 50, 0.02)
+    mock_sem.return_value = (MOCK_CONTENT["seminars"], 50, 0.02)
+    mock_slides.return_value = (MOCK_CONTENT["slides"], 50, 0.02)
+    mock_wp.return_value = (MOCK_CONTENT["work_programs"], 50, 0.02)
+    mock_bib.return_value = (MOCK_CONTENT["bibliography"], 50, 0.02)
 
     # 1. Генерация
     res = client.post("/api/generate", json={"topic": "DevOps", "hours": 72, "template_type": "ДПО"})
@@ -60,10 +78,11 @@ def test_full_generate_approve_export_flow(mock_content, mock_framework):
     assert data["status"] == "waiting_for_approval"
     session_id = data["session_id"]
 
-    # 2. Утверждение
+    # 2. Утверждение (параллельная генерация)
     res = client.post(f"/api/approve/{session_id}")
     assert res.status_code == 200
     assert res.json()["status"] == "completed"
+    assert "analytics" in res.json()
 
     # 3. Экспорт DOCX
     res = client.get(f"/api/export-docx/{session_id}")
