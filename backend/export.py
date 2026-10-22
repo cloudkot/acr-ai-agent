@@ -1,45 +1,86 @@
 import json
 import asyncio
+import time
 import xml.etree.ElementTree as ET
 from docx import Document
-from docx.shared import RGBColor
+from docx.shared import Pt, RGBColor, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from pptx import Presentation
 from schemas import Framework
 from logger import logger
 
-# ==========================================
-# [АРХИТЕКТУРА]: Синхронные генераторы (выполняются в отдельных потоках)
-# ==========================================
-
-def _export_to_docx_sync(framework: Framework, content: dict, filename: str, constraints_check: dict = None):
+def _export_to_docx_sync(framework: Framework, content: dict, filename: str, constraints_check: dict = None, generation_time: float = 0.0):
     doc = Document()
-    doc.add_heading('ДОПОЛНИТЕЛЬНАЯ ПРОФЕССИОНАЛЬНАЯ ПРОГРАММА', 0)
-    doc.add_paragraph(f"Тип: {framework.template_type}")
-    doc.add_paragraph(f"Объем: {framework.total_hours} академических часов")
     
+    # --- 1. Титульный лист (по шаблону АЦР) ---
+    title = doc.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = title.add_run("АВТОНОМНАЯ НЕКОММЕРЧЕСКАЯ ОРГАНИЗАЦИЯ\nДОПОЛНИТЕЛЬНОГО ПРОФЕССИОНАЛЬНОГО ОБРАЗОВАНИЯ\n«АКАДЕМИЯ ИНФОРМАЦИОННЫХ ТЕХНОЛОГИЙ»")
+    run.bold = True
+    
+    doc.add_paragraph("\n\n\n\n")
+    
+    order_para = doc.add_paragraph()
+    order_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    order_para.add_run("УТВЕРЖДЕНО\nПриказом № ______-ОБР\nот «___» ____________ 2026 г.\n\n")
+    
+    prog_type = "ДОПОЛНИТЕЛЬНАЯ ПРОФЕССИОНАЛЬНАЯ ПРОГРАММА\n" if framework.template_type == "ДПО" else "ДОПОЛНИТЕЛЬНАЯ ОБЩЕРАЗВИВАЮЩАЯ ПРОГРАММА\n"
+    prog_title = doc.add_paragraph()
+    prog_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    prog_title_run = prog_title.add_run(prog_type + f"«{framework.goal[:100]}»\n\nОбъем: {framework.total_hours} академических часов")
+    prog_title_run.bold = True
+    
+    doc.add_paragraph("\n\n\n\n")
+    doc.add_paragraph("Магас\n2026").alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_page_break()
+
+    # --- 2. Цель и нормативная база ---
+    doc.add_heading('1. Общая характеристика программы', level=1)
+    doc.add_heading('1.1. Цель программы', level=2)
+    doc.add_paragraph(framework.goal)
+    
+    if framework.prof_standard:
+        doc.add_paragraph(f"Нормативная база: {framework.prof_standard}")
+
     if constraints_check and not constraints_check.get("constraints_ok", True):
-        doc.add_heading('⚠ ВНИМАНИЕ: Предупреждения по ограничениям', level=1)
+        doc.add_heading('⚠ ВНИМАНИЕ: Предупреждения по ограничениям', level=2)
         p = doc.add_paragraph()
         p.runs[0].font.color.rgb = RGBColor(255, 0, 0)
         p.add_run("Нейросеть не до конца выполнила требования методиста:\n")
         for err in constraints_check.get("errors", []):
             doc.add_paragraph(err, style='List Bullet')
 
-    doc.add_heading('1. Цель программы', level=1)
-    doc.add_paragraph(framework.goal)
-    if framework.prof_standard:
-        doc.add_paragraph(f"Нормативная база: {framework.prof_standard}")
+    # --- 3. Карта компетенций ---
+    doc.add_heading('2. Планируемые результаты обучения (Карта компетенций)', level=1)
+    
+    table_comp = doc.add_table(rows=1, cols=3)
+    table_comp.style = 'Table Grid'
+    hdr = table_comp.rows[0].cells
+    hdr[0].text = "Компетенция"
+    hdr[1].text = "Знания (что должен знать)"
+    hdr[2].text = "Умения и навыки (что должен уметь)"
+    for cell in hdr:
+        cell.paragraphs[0].runs[0].bold = True
 
-    doc.add_heading('2. Учебный план', level=1)
-    table = doc.add_table(rows=1, cols=7)
-    table.style = 'Table Grid'
+    for comp in framework.competencies:
+        row = table_comp.add_row().cells
+        row[0].text = comp.name
+        row[1].text = "\n".join([f"- {k}" for k in comp.knowledge])
+        row[2].text = "\n".join([f"- {s}" for s in comp.skills])
+
+    # --- 4. Учебный план ---
+    doc.add_heading('3. Учебный план', level=1)
+    
+    table_plan = doc.add_table(rows=1, cols=7)
+    table_plan.style = 'Table Grid'
+    hdr_plan = table_plan.rows[0].cells
     headers = ["№", "Наименование модуля", "Всего ч.", "ЛК", "ПР", "ЛБ", "СРС"]
     for i, text in enumerate(headers):
-        table.rows[0].cells[i].text = text
-        table.rows[0].cells[i].paragraphs[0].runs[0].bold = True
+        hdr_plan[i].text = text
+        hdr_plan[i].paragraphs[0].runs[0].bold = True
 
     for i, mod in enumerate(framework.modules, 1):
-        row = table.add_row().cells
+        row = table_plan.add_row().cells
         row[0].text = str(i)
         row[1].text = mod.title
         row[2].text = str(mod.total_hours)
@@ -48,24 +89,26 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
         row[5].text = str(mod.labs)
         row[6].text = str(mod.srs)
 
-    row = table.add_row().cells
+    row = table_plan.add_row().cells
     row[1].text = "Итоговая аттестация"
     row[2].text = str(framework.final_assessment_hours)
     for i in [0, 3, 4, 5, 6]: row[i].text = "-"
 
-    row = table.add_row().cells
+    row = table_plan.add_row().cells
     row[1].text = "ИТОГО"
     row[1].paragraphs[0].runs[0].bold = True
     row[2].text = str(framework.total_hours)
     row[2].paragraphs[0].runs[0].bold = True
 
+    # --- 5. Рабочие программы ---
     if content.get("work_programs"):
-        doc.add_heading('3. Рабочие программы модулей', level=1)
+        doc.add_heading('4. Рабочие программы модулей', level=1)
         for wp in content["work_programs"]:
             doc.add_heading(wp.get("module_title", "Модуль"), level=2)
             doc.add_paragraph(wp.get("description", ""))
 
-    doc.add_heading('4. Тестовые материалы', level=1)
+    # --- 6. Тесты ---
+    doc.add_heading('5. Фонд оценочных средств (Тесты)', level=1)
     for i, test in enumerate(content.get("tests", []), 1):
         doc.add_paragraph(f"Вопрос {i}: {test.get('question')}")
         for opt in test.get('options', []):
@@ -73,42 +116,50 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
             doc.add_paragraph(f"{prefix}{opt}", style='List Bullet')
         doc.add_paragraph(f"Проверяемая компетенция: {test.get('related_competency', 'Не указана')}\n")
 
-    doc.add_heading('5. Задания для семинаров', level=1)
+    # --- 7. Семинары ---
+    doc.add_heading('6. Задания для семинарских занятий', level=1)
     for i, sem in enumerate(content.get("seminars", []), 1):
         doc.add_heading(f"Семинар {i}: {sem.get('module_title', '')}", level=2)
         doc.add_paragraph(f"Задание: {sem.get('task')}")
         doc.add_paragraph(f"Критерии оценки: {sem.get('criteria')}")
 
-    doc.add_heading('6. Планы лекций', level=1)
+    # --- 8. Лекции ---
+    doc.add_heading('7. Планы лекций', level=1)
     for lec in content.get("lectures", []):
         doc.add_heading(lec.get('module_title', 'Модуль'), level=2)
         for thesis in lec.get('theses', []):
             doc.add_paragraph(thesis, style='List Bullet')
 
+    # --- 9. Библиография ---
     if content.get("bibliography"):
-        doc.add_heading('7. Список литературы', level=1)
+        doc.add_heading('8. Список литературы', level=1)
         for book in content["bibliography"]:
             doc.add_paragraph(book, style='List Number')
+
+    # --- 10. Кадровое обеспечение (Пустые поля) ---
+    doc.add_page_break()
+    doc.add_heading('9. Кадровое обеспечение программы', level=1)
+    doc.add_paragraph("ФИО преподавателя: _______________________________________")
+    doc.add_paragraph("Ученая степень/звание: ___________________________________")
+    doc.add_paragraph("Должность: _______________________________________________")
+    doc.add_paragraph("\n\nРазработчик программы: ____________________ / _________________ /")
+    doc.add_paragraph("Согласовано: ____________________ / _________________ /")
+    
+    # Добавляем метрику времени генерации в конец документа для ревьюера
+    doc.add_paragraph(f"\n\n[Сгенерировано автоматически за {generation_time:.2f} секунд]").runs[0].font.size = Pt(8)
 
     doc.save(filename)
     return filename
 
 def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, constraints_check: dict = None):
     prs = Presentation()
+    
+    # Титульный слайд
     slide = prs.slides.add_slide(prs.slide_layouts[0])
     slide.shapes.title.text = f"Программа: {framework.goal[:50]}..."
     slide.placeholders[1].text = f"Объем: {framework.total_hours} ч.\nТип: {framework.template_type}"
     
-    if constraints_check and not constraints_check.get("constraints_ok", True):
-        slide = prs.slides.add_slide(prs.slide_layouts[1])
-        slide.shapes.title.text = "⚠ Внимание: Отклонения от ТЗ"
-        tf = slide.placeholders[1].text_frame
-        tf.text = "При генерации были нарушены ограничения:"
-        for err in constraints_check.get("errors", []):
-            p = tf.add_paragraph()
-            p.text = err
-            p.level = 1
-
+    # Слайды из лекций (или fallback)
     slides_data = content.get("slides", [])
     if not slides_data and content.get("lectures"):
         slides_data = [{"slide_title": lec.get("module_title"), "module_title": lec.get("module_title"), "bullets": lec.get("theses", [])} for lec in content["lectures"]]
@@ -159,26 +210,25 @@ def _export_tests_to_moodle_xml_sync(tests_data: list, filename: str):
     tree.write(filename, encoding="utf-8", xml_declaration=True)
     return filename
 
-def _export_to_json_sync(framework: Framework, content: dict, filename: str, constraints_check: dict = None):
+def _export_to_json_sync(framework: Framework, content: dict, filename: str, constraints_check: dict = None, generation_time: float = 0.0):
     data = {
         "framework": framework.model_dump(),
         "content": content,
-        "constraints_check": constraints_check
+        "constraints_check": constraints_check,
+        "metrics": {"generation_time_seconds": generation_time}
     }
     with open(filename, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
     return filename
 
 # ==========================================
-# [АРХИТЕКТУРА]: Асинхронные обертки
+# Асинхронные обертки
 # ==========================================
 
-async def export_to_docx(framework: Framework, content: dict, filename: str, constraints_check: dict = None):
-    """[ФИКС]: Запуск генерации Word в отдельном потоке."""
-    return await asyncio.to_thread(_export_to_docx_sync, framework, content, filename, constraints_check)
+async def export_to_docx(framework: Framework, content: dict, filename: str, constraints_check: dict = None, generation_time: float = 0.0):
+    return await asyncio.to_thread(_export_to_docx_sync, framework, content, filename, constraints_check, generation_time)
 
 async def export_to_pptx(framework: Framework, content: dict, filename: str, constraints_check: dict = None):
-    """[ФИКС]: Запуск генерации PPTX в отдельном потоке."""
     return await asyncio.to_thread(_export_to_pptx_sync, framework, content, filename, constraints_check)
 
 async def export_tests_to_lms(tests_data: list, filename: str):
@@ -187,5 +237,5 @@ async def export_tests_to_lms(tests_data: list, filename: str):
 async def export_tests_to_moodle_xml(tests_data: list, filename: str):
     return await asyncio.to_thread(_export_tests_to_moodle_xml_sync, tests_data, filename)
 
-async def export_to_json(framework: Framework, content: dict, filename: str, constraints_check: dict = None):
-    return await asyncio.to_thread(_export_to_json_sync, framework, content, filename, constraints_check)
+async def export_to_json(framework: Framework, content: dict, filename: str, constraints_check: dict = None, generation_time: float = 0.0):
+    return await asyncio.to_thread(_export_to_json_sync, framework, content, filename, constraints_check, generation_time)

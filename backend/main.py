@@ -6,6 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel
 import os
+import time
 from urllib.parse import urlparse
 
 # Импорты модулей
@@ -152,7 +153,7 @@ async def approve_endpoint(session_id: str):
 
 @app.get("/api/report/{session_id}")
 async def get_validation_report(session_id: str):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Расширенный отчет автопроверки."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Расширенный отчет автопроверки с проверкой полноты разделов."""
     session = await get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
@@ -160,10 +161,25 @@ async def get_validation_report(session_id: str):
     base_report = run_full_validation(session["framework"])
     
     if session["status"] == "completed" and session["content"]:
+        # 1. Проверка покрытия компетенций
         coverage = validate_coverage_with_content(session["framework"], session["content"])
         base_report["deep_coverage"] = coverage
+        
+        # 2. Проверка ограничений (часы, вопросы)
         c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
         base_report["constraints_check"] = c_check
+        
+        # [ФИКС РЕВЬЮЕРА]: Проверка полноты разделов
+        completeness = {
+            "has_tests": len(session["content"].get("tests", [])) > 0,
+            "has_lectures": len(session["content"].get("lectures", [])) > 0,
+            "has_seminars": len(session["content"].get("seminars", [])) > 0,
+            "has_slides": len(session["content"].get("slides", [])) > 0,
+            "has_work_programs": len(session["content"].get("work_programs", [])) > 0,
+            "has_bibliography": len(session["content"].get("bibliography", [])) > 0
+        }
+        completeness["all_sections_present"] = all(completeness.values())
+        base_report["completeness_check"] = completeness
         
     return {"session_id": session_id, "report": base_report}
 
@@ -182,12 +198,16 @@ async def upload_reference(file: UploadFile = File(...)):
 
 @app.get("/api/export-docx/{session_id}")
 async def export_docx_endpoint(session_id: str):
+    start_time = time.time()
     session = await get_session(session_id)
     if not session or session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Сессия не готова")
     c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
     filename = f"program_{session_id[:8]}.docx"
-    await export_to_docx(session["framework"], session["content"], filename, constraints_check=c_check)
+    
+    # Замеряем время генерации
+    generation_time = time.time() - start_time
+    await export_to_docx(session["framework"], session["content"], filename, constraints_check=c_check, generation_time=generation_time)
     return FileResponse(filename, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename=filename)
 
 @app.get("/api/export-pptx/{session_id}")
@@ -220,12 +240,15 @@ async def export_moodle_endpoint(session_id: str):
 
 @app.get("/api/export-json/{session_id}")
 async def export_json_endpoint(session_id: str):
+    start_time = time.time()
     session = await get_session(session_id)
     if not session or not session["content"]:
         raise HTTPException(status_code=400, detail="Контент не сгенерирован")
     c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
     filename = f"bundle_{session_id[:8]}.json"
-    await export_to_json(session["framework"], session["content"], filename, constraints_check=c_check)
+    
+    generation_time = time.time() - start_time
+    await export_to_json(session["framework"], session["content"], filename, constraints_check=c_check, generation_time=generation_time)
     return FileResponse(filename, media_type="application/json", filename=filename)
 
 # --- РАЗДАЧА ФРОНТЕНДА ---
