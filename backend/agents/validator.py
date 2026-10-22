@@ -3,6 +3,7 @@ import re
 from logger import logger
 
 def adjust_module_hours(mod: Module, new_total: int):
+    """[УТИЛИТА]: Пропорционально распределяет часы внутри модуля."""
     if mod.total_hours == 0:
         mod.total_hours = new_total
         mod.srs = new_total
@@ -16,6 +17,7 @@ def adjust_module_hours(mod: Module, new_total: int):
     mod.total_hours = mod.lectures + mod.practice + mod.labs + mod.srs
 
 def auto_correct_hours(framework: Framework, target_hours: int, constraints: str = None) -> Framework:
+    """[ТРЕБОВАНИЕ КЕЙСА]: Автокоррекция часов и нормативной базы."""
     if not framework.modules:
         return framework
 
@@ -56,6 +58,7 @@ def auto_correct_hours(framework: Framework, target_hours: int, constraints: str
     return framework
 
 def enforce_content_constraints(framework: Framework, content: dict, constraints: str = None) -> dict:
+    """[ФИКС РЕВЬЮЕРА]: Защита от выдумывания (Anti-Hallucination)."""
     forbidden_services = ["chatgpt", "openai", "midjourney", "claude", "gemini", "anthropic"]
     
     if isinstance(content.get("bibliography"), list):
@@ -63,7 +66,7 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
         for book in content["bibliography"]:
             if any(bad in book.lower() for bad in forbidden_services):
                 book = book + " [НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК / ЗАПРЕЩЕННЫЙ СЕРВИС]"
-            if not re.search(r'\d{4}', book):
+            if not re.search(r'\d{4}', book) and "ОШИБКА ГЕНЕРАЦИИ" not in book:
                 book = book + " [НЕПОДТВЕРЖДЕННЫЙ ИСТОЧНИК: нет года]"
             cleaned_bib.append(book)
         content["bibliography"] = cleaned_bib
@@ -77,6 +80,7 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
                             if bad in v.lower():
                                 item[k] = re.sub(f'(?i){bad}', 'GigaChat (российский аналог)', v)
 
+    # Проверка количества вопросов
     total_hours = framework.total_hours
     expected_q = max(10, total_hours // 24)
     if framework.template_type == "Общеразвивающая":
@@ -101,6 +105,7 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
                 })
             content["tests"] = tests
 
+    # Фильтрация слайдов
     if isinstance(content.get("slides"), list):
         if any("pandas" in m.title.lower() for m in framework.modules):
             content["slides"] = [s for s in content["slides"] if "pandas" in s.get("module_title", "").lower() or "pandas" in s.get("slide_title", "").lower()]
@@ -119,8 +124,9 @@ def check_content_constraints(framework: Framework, content: dict, constraints: 
     Ищет сообщения об ошибках генерации и добавляет их в отчет.
     """
     errors = []
+    error_pattern = "ОШИБКА ГЕНЕРАЦИИ"
     
-    # 1. Проверка количества вопросов
+    # 1. Проверка тестов
     expected_q = max(10, framework.total_hours // 24)
     if framework.template_type == "Общеразвивающая": expected_q = 10
     if constraints:
@@ -131,33 +137,28 @@ def check_content_constraints(framework: Framework, content: dict, constraints: 
     if actual_q < expected_q:
         errors.append(f"Ожидалось минимум {expected_q} вопросов, сгенерировано {actual_q}.")
 
-    # 2. Проверка на наличие ошибок генерации (наши новые заглушки)
-    error_pattern = "ОШИБКА ГЕНЕРАЦИИ"
-    
-    for test in content.get("tests", []):
-        if error_pattern in test.get("question", ""):
-            errors.append(f"Сбой при генерации тестового вопроса.")
-            break
+    if any(error_pattern in t.get("question", "") for t in content.get("tests", [])):
+        errors.append("Сбой при генерации тестовых вопросов.")
 
-    for sem in content.get("seminars", []):
-        if error_pattern in sem.get("task", ""):
-            errors.append(f"Сбой при генерации семинара для модуля '{sem.get('module_title')}'.")
-            break
-            
+    # 2. Проверка семинаров
+    if any(error_pattern in s.get("task", "") for s in content.get("seminars", [])):
+        errors.append("Сбой при генерации семинаров.")
+
+    # 3. Проверка лекций
     for lec in content.get("lectures", []):
         if any(error_pattern in thesis for thesis in lec.get("theses", [])):
             errors.append(f"Сбой при генерации лекции для модуля '{lec.get('module_title')}'.")
             break
 
-    for wp in content.get("work_programs", []):
-        if error_pattern in wp.get("description", ""):
-            errors.append(f"Сбой при генерации рабочей программы для модуля '{wp.get('module_title')}'.")
-            break
-            
+    # 4. Проверка рабочих программ
+    if any(error_pattern in wp.get("description", "") for wp in content.get("work_programs", [])):
+        errors.append("Сбой при генерации рабочих программ.")
+
+    # 5. Проверка библиографии
     if any(error_pattern in book for book in content.get("bibliography", [])):
         errors.append("Сбой при генерации списка литературы.")
 
-    # 3. Проверка запрещенных сервисов
+    # 6. Проверка запрещенных сервисов
     forbidden = ["chatgpt", "midjourney", "openai"]
     for book in content.get("bibliography", []):
         if any(b in book.lower() for b in forbidden) and "ЗАПРЕЩЕННЫЙ СЕРВИС" not in book:
@@ -166,6 +167,7 @@ def check_content_constraints(framework: Framework, content: dict, constraints: 
     return {"constraints_ok": len(errors) == 0, "errors": errors}
 
 def validate_coverage_with_content(framework: Framework, content: dict) -> dict:
+    """[ТРЕБОВАНИЕ КЕЙСА]: Проверка покрытия компетенций."""
     if not content:
         return {"coverage_ok": False, "uncovered": ["Нет контента"]}
 
@@ -192,6 +194,7 @@ def validate_coverage_with_content(framework: Framework, content: dict) -> dict:
     }
 
 def run_full_validation(framework: Framework) -> dict:
+    """[ТРЕБОВАНИЕ КЕЙСА]: Валидация каркаса (математика и нормативы)."""
     calculated_total = sum(module.total_hours for module in framework.modules) + framework.final_assessment_hours
     hours_match = calculated_total == framework.total_hours
     

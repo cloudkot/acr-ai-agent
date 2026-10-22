@@ -8,7 +8,7 @@ from logger import logger
 async def create_execution_plan(framework: Framework, constraints: str = None) -> tuple[ExecutionPlan, int, float]:
     """
     [НОВАЯ АРХИТЕКТУРА]: LLM-Планировщик.
-    Генерирует ДЕТАЛЬНЫЕ промпты для воркеров, чтобы они не падали.
+    Генерирует ДЕТАЛЬНЫЕ промпты для воркеров.
     """
     logger.info("Запуск LLM-планировщика...")
     
@@ -28,25 +28,20 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
     2. Каждая задача в "tasks" должна иметь:
        - "target_key": "tests", "lectures", "seminars", "slides", "work_programs" или "bibliography".
        - "expected_format": "json_array".
-       - "prompt": ГОТОВЫЙ, ДЕТАЛЬНЫЙ промпт для воркера.
-    3. КРИТИЧЕСКИ ВАЖНО: Промпт для воркера должен содержать полный контекст (название модуля, часы), иначе воркер не справится.
-    4. Для слайдов требуй строго: `[{{"slide_type": "title|content", "title": "...", "bullets": ["..."], "speaker_notes": "..."}}]`.
+       - "prompt": ГОТОВЫЙ промпт для воркера.
+    3. ВАЖНО: В поле "prompt" пиши обычный текст (без фигурных скобок и JSON-схем внутри текста, чтобы воркер не запутался). Просто попроси его выдать данные в нужном формате.
+    4. Для слайдов требуй строго: массив объектов с полями slide_type, title, bullets, speaker_notes.
     5. Верни ТОЛЬКО валидный JSON без markdown.
     </rules>
     
     <example_format>
     {{
-      "reasoning": "Разбиваю лекции по модулям, передаю контекст в каждый промпт.",
+      "reasoning": "Разбиваю лекции по модулям.",
       "tasks": [
         {{
           "target_key": "lectures",
           "expected_format": "json_array",
-          "prompt": "Ты — лектор. Составь подробный план лекции для модуля 'Введение в DevOps' (40 часов). Верни ТОЛЬКО JSON-массив: [{{\\"module_title\\": \\"Введение в DevOps\\", \\"theses\\": [\\"Подробный тезис 1\\", \\"Подробный тезис 2\\"]}}]"
-        }},
-        {{
-          "target_key": "seminars",
-          "expected_format": "json_array",
-          "prompt": "Ты — практик. Составь практический кейс для модуля 'Введение в DevOps' (40 часов). Верни ТОЛЬКО JSON-массив: [{{\\"module_title\\": \\"Введение в DevOps\\", \\"task\\": \\"Описание конкретного кейса\\", \\"criteria\\": \\"Критерии оценки\\", \\"related_competency\\": \\"Название компетенции\\"}}]"
+          "prompt": "Ты — лектор. Составь подробный план лекции для модуля 'Введение в DevOps' (40 часов). Верни ТОЛЬКО JSON-массив объектов. В каждом объекте должны быть поля: module_title (строка), theses (массив строк)."
         }}
       ]
     }}
@@ -78,28 +73,25 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
             fallback_tasks.append({
                 "target_key": "tests",
                 "expected_format": "json_array",
-                "prompt": f"Ты — тестолог. Составь 5 тестовых вопросов (часть {i+1}) по программе '{framework.goal[:50]}'. Верни ТОЛЬКО JSON-массив: [{{\"question\":\"...\", \"options\":[\"1\",\"2\",\"3\",\"4\"], \"correct_answer\":\"1\", \"related_competency\":\"...\"}}]"
+                "prompt": f"Ты — тестолог. Составь 5 тестовых вопросов (часть {i+1}) по программе '{framework.goal[:50]}'. Верни ТОЛЬКО JSON-массив объектов. В каждом объекте должны быть поля: question, options (массив из 4 строк), correct_answer, related_competency."
             })
             
-        # 2. Контент по модулям (с передачей контекста в промпт)
+        # 2. Контент по модулям (простыми словами, без каши из скобок)
         for mod in framework.modules:
-            # Лекции
             fallback_tasks.append({
                 "target_key": "lectures",
                 "expected_format": "json_array",
-                "prompt": f"Ты — лектор. Составь подробный план лекции для модуля '{mod.title}' ({mod.total_hours} часов). Верни ТОЛЬКО JSON-массив: [{{\"module_title\":\"{mod.title}\", \"theses\":[\"Конкретный тезис 1\", \"Конкретный тезис 2\"]}}]"
+                "prompt": f"Ты — лектор. Составь подробный план лекции для модуля '{mod.title}' ({mod.total_hours} часов). Верни ТОЛЬКО JSON-массив объектов с полями: module_title, theses (массив конкретных тезисов)."
             })
-            # Семинары
             fallback_tasks.append({
                 "target_key": "seminars",
                 "expected_format": "json_array",
-                "prompt": f"Ты — практик. Составь практический кейс для модуля '{mod.title}' ({mod.total_hours} часов). Верни ТОЛЬКО JSON-массив: [{{\"module_title\":\"{mod.title}\", \"task\":\"Подробное описание кейса\", \"criteria\":\"Критерии оценки\", \"related_competency\":\"...\"}}]"
+                "prompt": f"Ты — практик. Составь практический кейс для модуля '{mod.title}' ({mod.total_hours} часов). Верни ТОЛЬКО JSON-массив объектов с полями: module_title, task (описание кейса), criteria (критерии оценки), related_competency."
             })
-            # Рабочие программы
             fallback_tasks.append({
                 "target_key": "work_programs",
                 "expected_format": "json_array",
-                "prompt": f"Ты — методист. Напиши рабочую программу (3-4 предложения) для модуля '{mod.title}'. Верни ТОЛЬКО JSON-массив: [{{\"module_title\":\"{mod.title}\", \"description\":\"Подробное описание\"}}]"
+                "prompt": f"Ты — методист. Напиши рабочую программу (3-4 предложения) для модуля '{mod.title}'. Верни ТОЛЬКО JSON-массив объектов с полями: module_title, description."
             })
 
         # 3. Слайды
@@ -114,14 +106,14 @@ async def create_execution_plan(framework: Framework, constraints: str = None) -
             fallback_tasks.append({
                 "target_key": "slides",
                 "expected_format": "json_array",
-                "prompt": f"Ты — дизайнер презентаций. Составь 3 слайда для модуля '{mod.title}'. Верни ТОЛЬКО JSON-массив: [{{\"slide_type\":\"content\", \"title\":\"Заголовок\", \"bullets\":[\"Тезис 1\", \"Тезис 2\"], \"speaker_notes\":\"Текст для лектора\"}}]"
+                "prompt": f"Ты — дизайнер презентаций. Составь 3 слайда для модуля '{mod.title}'. Верни ТОЛЬКО JSON-массив объектов с полями: slide_type (title или content), title, bullets (массив строк), speaker_notes (текст для лектора)."
             })
 
         # 4. Библиография
         fallback_tasks.append({
             "target_key": "bibliography",
             "expected_format": "json_array",
-            "prompt": f"Ты — библиотекарь. Составь список из 5 реальных книг для программы '{framework.goal[:50]}'. Верни ТОЛЬКО JSON-массив строк: [\"Автор. Название. Год.\", \"...\"]"
+            "prompt": f"Ты — библиотекарь. Составь список из 5 реальных книг для программы '{framework.goal[:50]}'. Верни ТОЛЬКО JSON-массив строк в формате 'Автор. Название. Год.'."
         })
 
         fallback_plan = ExecutionPlan(

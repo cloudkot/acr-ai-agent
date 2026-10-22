@@ -18,11 +18,11 @@ MAX_CONCURRENT_REQUESTS = config.MAX_CONCURRENT_REQUESTS
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 def _extract_list_from_response(data: any) -> list:
-    """[УТИЛИТА]: Извлекает массив из ответа LLM."""
+    """[УТИЛИТА]: Пытается вытащить массив из ответа LLM, даже если он обернут в объект."""
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for key in ["items", "data", "results", "questions", "tasks", "content"]:
+        for key in ["items", "data", "results", "questions", "tasks", "content", "slides"]:
             if key in data and isinstance(data[key], list):
                 return data[key]
         return [data]
@@ -60,6 +60,15 @@ async def _execute_single_task(task, retries: int = 3) -> tuple[str, any, int, f
                     
                     return task.target_key, None, total_tokens, total_cost
                 await asyncio.sleep(2)
+
+def _rule_based_fallback_slide(framework: Framework, mod_title: str) -> dict:
+    """[ФИКС]: Заглушка для слайда, если LLM не справилась."""
+    return {
+        "slide_type": "content",
+        "title": f"Ошибка генерации: {mod_title}",
+        "bullets": ["Нейросеть не смогла создать слайд.", "Повторите генерацию."],
+        "speaker_notes": "Сбой генерации контента."
+    }
 
 async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict, int, float]:
     """
@@ -132,7 +141,7 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
         final_content["tests"].append(fallback_test)
         generation_errors += 1
 
-    # 2. Лекции и Семинары
+    # 2. Лекции, Семинары, Слайды, Рабочие программы
     for mod in framework.modules:
         if not any(mod.title.lower() in str(l.get("module_title", "")).lower() for l in final_content["lectures"]):
             final_content["lectures"].append(_rule_based_fallback_lecture(framework, mod.title))
@@ -142,19 +151,21 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
             final_content["seminars"].append(_rule_based_fallback_seminar(framework, mod.title, mod.total_hours))
             generation_errors += 1
 
-    # 3. Библиография
-    if not final_content["bibliography"]:
-        final_content["bibliography"] = _rule_based_fallback_bibliography(framework)
-        generation_errors += 1
+        if not any(mod.title.lower() in str(sl.get("title", "")).lower() for sl in final_content["slides"]):
+            final_content["slides"].append(_rule_based_fallback_slide(framework, mod.title))
+            generation_errors += 1
 
-    # 4. Рабочие программы
-    if not final_content["work_programs"]:
-        for mod in framework.modules:
+        if not any(mod.title.lower() in str(wp.get("module_title", "")).lower() for wp in final_content["work_programs"]):
             final_content["work_programs"].append({
                 "module_title": mod.title,
                 "description": "ОШИБКА ГЕНЕРАЦИИ. Описание программы не было создано. Повторите генерацию."
             })
             generation_errors += 1
+
+    # 3. Библиография
+    if not final_content["bibliography"]:
+        final_content["bibliography"] = _rule_based_fallback_bibliography(framework)
+        generation_errors += 1
 
     if generation_errors > 0:
         logger.warning(f"Завершено с ошибками генерации. Количество сбойных элементов: {generation_errors}")

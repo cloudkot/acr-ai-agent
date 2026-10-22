@@ -3,10 +3,9 @@ import asyncio
 import time
 import xml.etree.ElementTree as ET
 from docx import Document
-from docx.shared import Pt, RGBColor, Cm
+from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from pptx import Presentation
-from pptx.util import Inches, Pt as PptxPt
 from schemas import Framework
 from logger import logger
 
@@ -45,11 +44,9 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
 
     if constraints_check and not constraints_check.get("constraints_ok", True):
         doc.add_heading('ВНИМАНИЕ: Предупреждения по ограничениям', level=2)
-        p = doc.add_paragraph()
-        p.runs[0].font.color.rgb = RGBColor(255, 0, 0)
-        p.add_run("Нейросеть не до конца выполнила требования методиста:\n")
         for err in constraints_check.get("errors", []):
-            doc.add_paragraph(err, style='List Bullet')
+            p = doc.add_paragraph()
+            p.add_run(err).font.color.rgb = RGBColor(255, 0, 0)
 
     # --- 3. Карта компетенций ---
     doc.add_heading('2. Планируемые результаты обучения (Карта компетенций)', level=1)
@@ -103,12 +100,19 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
         doc.add_heading('4. Рабочие программы модулей', level=1)
         for wp in content["work_programs"]:
             doc.add_heading(wp.get("module_title", "Модуль"), level=2)
-            doc.add_paragraph(wp.get("description", ""))
+            desc = wp.get("description", "")
+            p = doc.add_paragraph(desc)
+            if "ОШИБКА ГЕНЕРАЦИИ" in desc:
+                p.runs[0].font.color.rgb = RGBColor(255, 0, 0)
 
     # --- 6. Тесты ---
     doc.add_heading('5. Фонд оценочных средств (Тесты)', level=1)
     for i, test in enumerate(content.get("tests", []), 1):
-        doc.add_paragraph(f"Вопрос {i}: {test.get('question')}")
+        q_text = test.get('question', '')
+        p = doc.add_paragraph(f"Вопрос {i}: {q_text}")
+        if "ОШИБКА ГЕНЕРАЦИИ" in q_text:
+            p.runs[0].font.color.rgb = RGBColor(255, 0, 0)
+
         for opt in test.get('options', []):
             prefix = "[+] " if opt == test.get('correct_answer') else "[ ] "
             doc.add_paragraph(f"{prefix}{opt}", style='List Bullet')
@@ -118,7 +122,12 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
     doc.add_heading('6. Задания для семинарских занятий', level=1)
     for i, sem in enumerate(content.get("seminars", []), 1):
         doc.add_heading(f"Семинар {i}: {sem.get('module_title', '')}", level=2)
-        doc.add_paragraph(f"Задание: {sem.get('task')}")
+        
+        task_text = sem.get('task', '')
+        p_task = doc.add_paragraph(f"Задание: {task_text}")
+        if "ОШИБКА ГЕНЕРАЦИИ" in task_text:
+            p_task.runs[0].font.color.rgb = RGBColor(255, 0, 0)
+
         doc.add_paragraph(f"Критерии оценки: {sem.get('criteria')}")
 
     # --- 8. Лекции ---
@@ -126,13 +135,17 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
     for lec in content.get("lectures", []):
         doc.add_heading(lec.get('module_title', 'Модуль'), level=2)
         for thesis in lec.get('theses', []):
-            doc.add_paragraph(thesis, style='List Bullet')
+            p = doc.add_paragraph(thesis, style='List Bullet')
+            if "ОШИБКА ГЕНЕРАЦИИ" in thesis:
+                p.runs[0].font.color.rgb = RGBColor(255, 0, 0)
 
     # --- 9. Библиография ---
     if content.get("bibliography"):
         doc.add_heading('8. Список литературы', level=1)
         for book in content["bibliography"]:
-            doc.add_paragraph(book, style='List Number')
+            p = doc.add_paragraph(book, style='List Number')
+            if "ОШИБКА ГЕНЕРАЦИИ" in book:
+                p.runs[0].font.color.rgb = RGBColor(255, 0, 0)
 
     # --- 10. Кадровое обеспечение (Пустые поля) ---
     doc.add_page_break()
@@ -151,10 +164,12 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
 def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, constraints_check: dict = None):
     prs = Presentation()
     
+    # Титульный слайд
     slide = prs.slides.add_slide(prs.slide_layouts[0])
     slide.shapes.title.text = f"Программа: {framework.goal[:50]}..."
     slide.placeholders[1].text = f"Объем: {framework.total_hours} ч.\nТип: {framework.template_type}"
     
+    # Слайд с предупреждениями (если есть)
     if constraints_check and not constraints_check.get("constraints_ok", True):
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         slide.shapes.title.text = "Внимание: Отклонения от ТЗ"
@@ -165,12 +180,17 @@ def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, con
             p.text = err
             p.level = 1
 
+    # Слайды из контента
     slides_data = content.get("slides", [])
+    
+    # Если слайдов нет (полный сбой), делаем fallback из лекций
     if not slides_data and content.get("lectures"):
         for lec in content["lectures"]:
             slides_data.append({
-                "slide_type": "content", "title": lec.get("module_title", "Лекция"),
-                "bullets": lec.get("theses", []), "speaker_notes": ""
+                "slide_type": "content",
+                "title": lec.get("module_title", "Лекция"),
+                "bullets": lec.get("theses", []),
+                "speaker_notes": "Слайд сгенерирован на основе тезисов лекции."
             })
 
     for slide_info in slides_data:
@@ -182,7 +202,8 @@ def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, con
         if slide_type == "title":
             slide = prs.slides.add_slide(prs.slide_layouts[0])
             slide.shapes.title.text = title_text
-            if bullets: slide.placeholders[1].text = bullets[0]
+            if bullets and len(bullets) > 0:
+                slide.placeholders[1].text = bullets[0]
         elif slide_type == "two_columns" and len(bullets) >= 2:
             slide = prs.slides.add_slide(prs.slide_layouts[3])
             slide.shapes.title.text = title_text
@@ -194,15 +215,19 @@ def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, con
             tf_right.text = bullets[mid]
             for b in bullets[mid+1:]: tf_right.add_paragraph(b)
         else:
+            # Обычный слайд
             slide = prs.slides.add_slide(prs.slide_layouts[1])
             slide.shapes.title.text = title_text
             tf = slide.placeholders[1].text_frame
-            if bullets:
-                tf.text = bullets[0]
+            
+            if bullets and len(bullets) > 0:
+                tf.text = str(bullets[0])
                 for bullet in bullets[1:]:
                     p = tf.add_paragraph()
-                    p.text = bullet
+                    p.text = str(bullet)
                     p.level = 1
+            else:
+                tf.text = "ОШИБКА ГЕНЕРАЦИИ: Нет тезисов для этого слайда."
                     
         if notes_text:
             slide.notes_slide.notes_text_frame.text = notes_text
@@ -213,7 +238,6 @@ def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, con
 def _export_tests_to_lms_sync(tests_data: list, filename: str):
     """[ФИКС РЕВЬЮЕРА]: Экспорт в GIFT с поддержкой категорий."""
     with open(filename, 'w', encoding='utf-8') as f:
-        # Группируем по категориям
         categories = {}
         for test in tests_data:
             cat = test.get('category', 'Общая')
@@ -236,8 +260,6 @@ def _export_tests_to_lms_sync(tests_data: list, filename: str):
 def _export_tests_to_moodle_xml_sync(tests_data: list, filename: str):
     """[ФИКС РЕВЬЮЕРА]: Экспорт в Moodle XML с поддержкой категорий."""
     quiz = ET.Element("quiz")
-    
-    # Группируем по категориям
     categories = {}
     for test in tests_data:
         cat = test.get('category', 'Общая')
@@ -245,7 +267,6 @@ def _export_tests_to_moodle_xml_sync(tests_data: list, filename: str):
         categories[cat].append(test)
         
     for cat, tests in categories.items():
-        # Определение категории
         cat_q = ET.SubElement(quiz, "question", type="category")
         cat_node = ET.SubElement(cat_q, "category")
         cat_text = ET.SubElement(cat_node, "text")
