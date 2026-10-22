@@ -82,6 +82,9 @@ function MainApp() {
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
+  // Сохранение состояния
+  const [isRestored, setIsRestored] = useState(false);
+
   useEffect(() => {
     if (darkMode) {
       document.documentElement.classList.add('dark');
@@ -92,7 +95,35 @@ function MainApp() {
     }
   }, [darkMode]);
 
-  // Загрузка аналитики при старте
+  // Восстановление состояния при перезагрузке
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('appState');
+      if (saved) {
+        const data = JSON.parse(saved);
+        if (data.screen) setScreen(data.screen);
+        if (data.topic) setTopic(data.topic);
+        if (data.hours) setHours(data.hours);
+        if (data.hoursInput) setHoursInput(data.hoursInput);
+        if (data.sessionId) setSessionId(data.sessionId);
+        if (data.framework) setFramework(data.framework);
+        if (data.content) setContent(data.content);
+      }
+    } catch (e) {
+      console.warn('Не удалось восстановить состояние');
+    } finally {
+      setIsRestored(true);
+    }
+  }, []);
+
+  // Сохранение состояния при каждом изменении
+  useEffect(() => {
+    if (!isRestored) return;
+    const state = { screen, topic, hours, hoursInput, sessionId, framework, content };
+    localStorage.setItem('appState', JSON.stringify(state));
+  }, [screen, topic, hours, hoursInput, sessionId, framework, content, isRestored]);
+
+  // Загрузка аналитики
   useEffect(() => {
     getAnalytics()
       .then(setAnalytics)
@@ -190,7 +221,7 @@ function MainApp() {
       setContent(res);
       setScreen('result');
       
-      // [ФИКС]: Обновляем аналитику после успешной генерации
+      // Обновляем аналитику
       try {
         const updatedAnalytics = await getAnalytics();
         setAnalytics(updatedAnalytics);
@@ -220,6 +251,7 @@ function MainApp() {
     setReferenceFile(null);
     setReferenceText('');
     setError(null);
+    localStorage.removeItem('appState');
   };
 
   return (
@@ -531,7 +563,15 @@ function MainApp() {
               </div>
             </div>
 
-            {/* ВИДЖЕТ АНАЛИТИКИ — ОБНОВЛЕННЫЙ (3 цифры: программы, токены, рубли) */}
+            {/* Кнопка "Новый проект" на экране результата */}
+            <button
+              onClick={handleRestart}
+              className="flex items-center justify-center gap-2 w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 py-3 rounded-xl font-bold hover:bg-gray-50 dark:hover:bg-gray-700 transition-all"
+            >
+              <RotateCcw className="w-5 h-5" /> Создать новую программу
+            </button>
+
+            {/* ВИДЖЕТ АНАЛИТИКИ */}
             {analytics && (
               <div className="flex gap-2 sm:gap-4 p-4 bg-white dark:bg-gray-800 rounded-2xl border border-blue-100 dark:border-blue-900/50 shadow-lg">
                 <div className="flex-1 text-center border-r border-gray-100 dark:border-gray-700">
@@ -626,7 +666,6 @@ function MainApp() {
               </div>
             )}
 
-            {/* БИБЛИОГРАФИЯ — ИСПРАВЛЕНО: теперь выводим строку, а не объект */}
             {content.content?.bibliography && content.content.bibliography.length > 0 && (
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
                 <div className="flex items-center gap-2 text-sm font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-4">
