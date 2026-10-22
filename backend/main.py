@@ -106,7 +106,7 @@ async def startup_event():
         parsed = urlparse(base_url)
         if not all([parsed.scheme, parsed.netloc]):
             raise ValueError(f"Некорректный OPENAI_BASE_URL: {base_url}")
-    print("✅ База данных инициализирована. Валидация URL пройдена.")
+    print("База данных инициализирована. Валидация URL пройдена.")
 
 # --- СЛУЖЕБНЫЕ ЭНДПОИНТЫ ---
 
@@ -153,7 +153,7 @@ async def approve_endpoint(session_id: str):
 
 @app.get("/api/report/{session_id}")
 async def get_validation_report(session_id: str):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Расширенный отчет автопроверки с проверкой полноты разделов."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Расширенный отчет автопроверки."""
     session = await get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
@@ -165,11 +165,11 @@ async def get_validation_report(session_id: str):
         coverage = validate_coverage_with_content(session["framework"], session["content"])
         base_report["deep_coverage"] = coverage
         
-        # 2. Проверка ограничений (часы, вопросы)
+        # 2. Проверка ограничений
         c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
         base_report["constraints_check"] = c_check
         
-        # [ФИКС РЕВЬЮЕРА]: Проверка полноты разделов
+        # 3. Проверка полноты разделов
         completeness = {
             "has_tests": len(session["content"].get("tests", [])) > 0,
             "has_lectures": len(session["content"].get("lectures", [])) > 0,
@@ -205,7 +205,6 @@ async def export_docx_endpoint(session_id: str):
     c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
     filename = f"program_{session_id[:8]}.docx"
     
-    # Замеряем время генерации
     generation_time = time.time() - start_time
     await export_to_docx(session["framework"], session["content"], filename, constraints_check=c_check, generation_time=generation_time)
     return FileResponse(filename, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename=filename)
