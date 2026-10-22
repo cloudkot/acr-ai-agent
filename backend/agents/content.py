@@ -1,22 +1,17 @@
-import re
 import json
 import asyncio
+import re
 from cloud import ask_llm, MODEL_FAST
 from schemas import Framework
 from utils.json_parser import extract_json_from_text
 from config import config
 from logger import logger
 
-# [АРХИТЕКТУРА]: Глобальный семафор для ограничения параллельных запросов к LLM
 MAX_CONCURRENT_REQUESTS = config.MAX_CONCURRENT_REQUESTS
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-
 def clean_text_field(text: any) -> str:
-    """
-    [ФИКС]: Безопасно конвертирует ЛЮБОЙ тип данных в строку.
-    Защищает от падения, если LLM вернет вместо строки объект или число.
-    """
+    """[ФИКС]: Безопасно конвертирует ЛЮБОЙ тип данных в строку."""
     if not text:
         return ""
     if not isinstance(text, str):
@@ -26,7 +21,6 @@ def clean_text_field(text: any) -> str:
     return text.strip()
 
 def validate_test_format(data: list) -> list:
-    """[ТРЕБОВАНИЕ КЕЙСА]: Валидация структуры тестовых вопросов."""
     valid_tests = []
     if not isinstance(data, list):
         return valid_tests
@@ -49,22 +43,25 @@ def validate_test_format(data: list) -> list:
     return valid_tests
 
 def validate_seminar_format(data: list) -> list:
-    """[ТРЕБОВАНИЕ КЕЙСА]: Валидация структуры семинаров."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Валидация семинаров с автогенерацией критериев."""
     valid_seminars = []
     if not isinstance(data, list):
         return valid_seminars
 
     for item in data:
         if isinstance(item, dict) and item.get("task") and item.get("task") != "None":
+            # Если нейросеть забыла критерии, подставляем дефолтные
+            criteria = clean_text_field(item.get("criteria", ""))
+            if not criteria or criteria == "Критерии не указаны":
+                criteria = "Критерии оценки: 1) Корректность применения инструментов; 2) Полнота реализации; 3) Защита решения."
+
             valid_seminars.append({
                 "module_title": clean_text_field(item.get("module_title", "")),
                 "task": clean_text_field(item.get("task")),
-                "criteria": clean_text_field(item.get("criteria", "Критерии не указаны")),
+                "criteria": criteria,
                 "related_competency": clean_text_field(item.get("related_competency", "Общая"))
             })
     return valid_seminars
-
-
 
 def _rule_based_fallback_seminar(framework: Framework, mod_title: str, mod_hours: int) -> dict:
     logger.warning(f"Сбой генерации семинара для модуля '{mod_title}'.")

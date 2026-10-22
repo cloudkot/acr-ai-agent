@@ -50,6 +50,7 @@ def _rule_based_fallback_slide(framework: Framework, mod_title: str) -> dict:
 async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict, int, float]:
     """
     [АРХИТЕКТУРА]: Исполнитель плана с очередью повторных попыток.
+    Увеличены паузы для предотвращения Rate Limit от шлюза GigaChat.
     """
     logger.info(f"Запуск Исполнителя. В плане {len(plan.tasks)} задач.")
     
@@ -63,13 +64,13 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
     generation_errors = 0
     
     pending_tasks = list(plan.tasks)
-    max_rounds = 3
+    max_rounds = 4 # Увеличили до 4 раундов (1 основная + 3 повторных)
     
     for round_num in range(max_rounds):
         if not pending_tasks:
             break
             
-        logger.info(f"Раунд выполнения {round_num + 1}. Осталось задач: {len(pending_tasks)}")
+        logger.info(f"Раунд выполнения {round_num + 1}/{max_rounds}. Осталось задач: {len(pending_tasks)}")
         
         tasks = [_execute_single_task(task) for task in pending_tasks]
         results = await asyncio.gather(*tasks)
@@ -86,7 +87,7 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                 next_pending.append(failed_task)
                 continue
                 
-            # Обработка библиографии (там могут быть объекты)
+            # Обработка библиографии
             if key == "bibliography":
                 if isinstance(data, dict) and "resources" in data:
                     for item in data["resources"]:
@@ -99,21 +100,21 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                     final_content[key].extend([str(x) for x in items if isinstance(x, str)])
                 continue
 
-            # Обработка остального контента (батчи лекций, семинаров)
+            # Обработка остального контента (батчи)
             items = _extract_list_from_response(data)
             if key == "tests":
                 final_content[key].extend(validate_test_format(items))
             elif key == "seminars":
                 final_content[key].extend(validate_seminar_format(items))
             else:
-                # Для лекций, слайдов и рабочих программ
                 valid_items = [x for x in items if isinstance(x, dict) and x]
                 final_content[key].extend(valid_items)
 
         pending_tasks = next_pending
         if pending_tasks:
-            logger.warning(f"Пауза 5 секунд перед повторной попыткой {len(pending_tasks)} задач...")
-            await asyncio.sleep(5)
+            # [ФИКС]: Увеличили паузу до 10 секунд, чтобы шлюз "остыл"
+            logger.warning(f"Rate Limit защита: пауза 10 секунд перед повтором {len(pending_tasks)} задач...")
+            await asyncio.sleep(10)
 
     if pending_tasks:
         logger.error(f"После {max_rounds} раундов осталось {len(pending_tasks)} сбойных задач.")
