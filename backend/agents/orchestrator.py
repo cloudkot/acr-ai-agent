@@ -11,7 +11,10 @@ from state_store import save_session, get_session, log_action
 from utils.json_parser import extract_json_from_text
 from logger import logger
 
+# ==========================================
 # [АРХИТЕКТУРА GIGACOWORK]: Изолированные Навыки
+# ==========================================
+
 class CurriculumSkill(BaseAgent):
     def __init__(self):
         super().__init__("Curriculum Architect", "Генерирует каркас программы.")
@@ -55,15 +58,19 @@ class RevisionSkill(BaseAgent):
         context["cost"] = context.get("cost", 0.0) + cost
         return context
 
+# ==========================================
 # [АРХИТЕКТУРА]: Динамический Оркестратор
+# ==========================================
+
 class AgentOrchestrator:
     """
     Центральный диспетчер с реестром навыков.
+    Пайплайны собираются динамически из списка шагов.
     """
     def __init__(self):
         self.skills: Dict[str, BaseAgent] = {}
         
-        # Регистрация навыков
+        # Регистрация всех изолированных навыков
         self.register_skill("curriculum", CurriculumSkill())
         self.register_skill("planner", PlannerSkill())
         self.register_skill("executor", ExecutorSkill())
@@ -75,6 +82,7 @@ class AgentOrchestrator:
         self.skills[name] = skill
 
     async def run_steps(self, step_names: List[str], context: Dict[str, Any], parallel: bool = False) -> Dict[str, Any]:
+        """[АРХИТЕКТУРА]: Динамический запуск шагов."""
         if parallel:
             logger.info(f"Параллельный запуск навыков: {step_names}")
             tasks = [self.skills[name].execute(context.copy()) for name in step_names]
@@ -92,7 +100,7 @@ class AgentOrchestrator:
         return context
 
     async def run_generate_pipeline(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        # Шаг 1: Генерация каркаса -> Валидация
+        # Шаг 1: Генерация каркаса -> Валидация (включая нормативную опору)
         context = await self.run_steps(["curriculum", "validation"], context)
         
         await save_session(
@@ -119,7 +127,7 @@ class AgentOrchestrator:
             "constraints": session.get("constraints"), "tokens": session.get("tokens_used", 0), "cost": session.get("cost_rub", 0.0)
         }
         
-        # [НОВАЯ АРХИТЕКТУРА]: Планировщик -> Исполнитель -> Валидация
+        # Шаг 2: Планировщик -> Исполнитель -> Валидация контента (Anti-Hallucination)
         context = await self.run_steps(["planner", "executor", "validation"], context)
         
         content = context.get("content", {})
@@ -160,7 +168,10 @@ class AgentOrchestrator:
             "analytics": {"tokens_spent": context["tokens"], "cost_rub": round(context["cost"], 2)}
         }
 
+# ==========================================
 # ПУБЛИЧНЫЕ ФУНКЦИИ
+# ==========================================
+
 orchestrator = AgentOrchestrator()
 
 async def clarify_and_classify(topic: str, hours: int = None, reference_text: str = None) -> dict:
