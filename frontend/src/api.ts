@@ -6,11 +6,16 @@ export interface Competency {
   name: string;
   knowledge: string[];
   skills: string[];
+  related_topics?: string[]; // <-- Добавили
 }
 
 export interface Module {
   title: string;
-  hours: number;
+  total_hours: number; // <-- Добавили
+  lectures: number;    // <-- Добавили
+  practice: number;    // <-- Добавили
+  labs: number;        // <-- Добавили
+  srs: number;         // <-- Добавили
 }
 
 export interface Framework {
@@ -78,7 +83,7 @@ export interface ContentData {
     }>;
   };
   work_programs?: WorkProgram[];
-  bibliography?: BibliographyItem[];
+  bibliography?: (string | BibliographyItem)[]; // <-- Может быть строкой или объектом
 }
 
 export interface ContentResponse {
@@ -113,22 +118,31 @@ export async function generateFramework(
   templateType: string = 'auto', 
   referenceText?: string
 ): Promise<GenerateResponse> {
+  const body: any = { 
+    topic, 
+    hours, 
+    template_type: templateType 
+  };
+  
+  if (referenceText && referenceText.trim()) {
+    body.reference_text = referenceText;
+  }
+
   const res = await fetch(`${BASE_URL}/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      topic, 
-      hours, 
-      template_type: templateType, 
-      reference_text: referenceText || undefined 
-    }),
+    body: JSON.stringify(body),
   });
   
   if (!res.ok) {
-    let errorMsg = 'Не удалось сгенерировать каркас. Попробуйте позже.';
+    let errorMsg = 'Не удалось сгенерировать каркас.';
     try {
       const errData = await res.json();
-      errorMsg = errData.detail || errData.message || errorMsg;
+      if (Array.isArray(errData.detail)) {
+        errorMsg = errData.detail.map((e: any) => `${e.loc.join('.')}: ${e.msg}`).join('; ');
+      } else {
+        errorMsg = errData.detail || errData.message || errorMsg;
+      }
     } catch (e) {}
     throw new Error(errorMsg);
   }
@@ -169,12 +183,12 @@ export async function approveFramework(sessionId: string): Promise<ContentRespon
   return res.json();
 }
 
-// 4. Скачивание файлов (ИСПРАВЛЕНО: добавлен moodle)
-export function downloadFile(sessionId: string, type: 'docx' | 'pptx' | 'lms' | 'json' | 'moodle') {
+// 4. Скачивание файлов
+export function downloadFile(sessionId: string, type: 'docx' | 'pptx' | 'lms' | 'moodle' | 'json') {
   window.location.href = `${BASE_URL}/export-${type}/${sessionId}`;
 }
 
-// 5. Аналитика (НОВОЕ)
+// 5. Аналитика
 export async function getAnalytics(): Promise<Analytics> {
   const res = await fetch(`${BASE_URL}/analytics`);
   if (!res.ok) throw new Error('Ошибка загрузки аналитики');

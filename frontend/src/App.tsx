@@ -5,7 +5,7 @@ import {
   FileText, BookOpen, GraduationCap, RotateCcw, 
   Sparkles, FileDown, Presentation, Moon, Sun,
   Minus, Plus, AlertCircle, Paperclip, X, Library,
-  Coins, Cpu
+   Coins, Cpu
 } from 'lucide-react';
 import { 
   generateFramework, 
@@ -76,13 +76,15 @@ function MainApp() {
   // Аналитика
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
 
+  // Состояние для текста лоадера (долгая генерация)
+  const [loaderText, setLoaderText] = useState('Генерирую материалы...');
+
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem('theme');
     if (saved) return saved === 'dark';
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
-  // Сохранение состояния
   const [isRestored, setIsRestored] = useState(false);
 
   useEffect(() => {
@@ -95,7 +97,6 @@ function MainApp() {
     }
   }, [darkMode]);
 
-  // Восстановление состояния при перезагрузке
   useEffect(() => {
     try {
       const saved = localStorage.getItem('appState');
@@ -116,14 +117,12 @@ function MainApp() {
     }
   }, []);
 
-  // Сохранение состояния при каждом изменении
   useEffect(() => {
     if (!isRestored) return;
     const state = { screen, topic, hours, hoursInput, sessionId, framework, content };
     localStorage.setItem('appState', JSON.stringify(state));
   }, [screen, topic, hours, hoursInput, sessionId, framework, content, isRestored]);
 
-  // Загрузка аналитики
   useEffect(() => {
     getAnalytics()
       .then(setAnalytics)
@@ -216,12 +215,16 @@ function MainApp() {
   const handleApprove = async () => {
     setLoading(true);
     setError(null);
+    setLoaderText('Генерирую материалы...'); // Сброс текста
+
+    const timer1 = setTimeout(() => setLoaderText('ИИ обрабатывает большой объем данных. Пожалуйста, ожидайте...'), 120000);
+    const timer2 = setTimeout(() => setLoaderText('Генерация идет дольше обычного, но процесс не завис. Ожидайте...'), 300000);
+
     try {
       const res = await approveFramework(sessionId);
       setContent(res);
       setScreen('result');
       
-      // Обновляем аналитику
       try {
         const updatedAnalytics = await getAnalytics();
         setAnalytics(updatedAnalytics);
@@ -231,6 +234,9 @@ function MainApp() {
     } catch (e: any) {
       setError(e.message || 'Ошибка утверждения');
     } finally {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      setLoaderText('Генерирую материалы...');
       setLoading(false);
     }
   };
@@ -482,20 +488,41 @@ function MainApp() {
               <p className="text-lg font-medium text-gray-800 dark:text-gray-200 leading-relaxed">{framework.goal || 'Цель не указана'}</p>
             </div>
 
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
+            {/* ТАБЛИЦА УЧЕБНОГО ПЛАНА */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6 mb-6">
               <div className="flex items-center gap-2 text-xs font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest mb-4">
-                <BookOpen className="w-4 h-4" /> Модули программы
+                <BookOpen className="w-4 h-4" /> Учебный план
               </div>
-              <div className="space-y-2">
-                {framework.modules?.map((mod: any, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl border border-gray-100 dark:border-gray-700">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 flex items-center justify-center font-bold text-sm">{i + 1}</div>
-                      <span className="font-semibold text-gray-800 dark:text-gray-200">{mod.title || mod.name || 'Без названия'}</span>
-                    </div>
-                    {mod.hours && <span className="text-sm font-bold text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 px-2 py-1 rounded-md">{mod.hours} ч</span>}
-                  </div>
-                ))}
+              
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm text-gray-600 dark:text-gray-300">
+                  <thead className="text-xs uppercase bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                    <tr>
+                      <th className="px-4 py-3 rounded-tl-lg">Модуль</th>
+                      <th className="px-4 py-3 text-center">Всего</th>
+                      <th className="px-4 py-3 text-center">ЛК</th>
+                      <th className="px-4 py-3 text-center">ПР</th>
+                      <th className="px-4 py-3 text-center">ЛБ</th>
+                      <th className="px-4 py-3 text-center rounded-tr-lg">СРС</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {framework.modules?.map((mod, i) => (
+                      <tr key={i} className="border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                        <td className="px-4 py-3 font-medium text-gray-900 dark:text-white">
+                          {mod.title}
+                        </td>
+                        <td className="px-4 py-3 text-center font-bold text-blue-600 dark:text-blue-400">
+                          {mod.total_hours}
+                        </td>
+                        <td className="px-4 py-3 text-center">{mod.lectures}</td>
+                        <td className="px-4 py-3 text-center">{mod.practice}</td>
+                        <td className="px-4 py-3 text-center">{mod.labs}</td>
+                        <td className="px-4 py-3 text-center">{mod.srs}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
 
@@ -511,6 +538,20 @@ function MainApp() {
                       {comp.knowledge?.map((k, j) => <span key={j} className="bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-200 px-2.5 py-1 rounded-lg text-xs font-medium">{k}</span>)}
                       {comp.skills?.map((s, j) => <span key={`s${j}`} className="bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200 px-2.5 py-1 rounded-lg text-xs font-medium">{s}</span>)}
                     </div>
+                    
+                    {/* СВЯЗАННЫЕ ТЕМЫ */}
+                    {comp.related_topics && comp.related_topics.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
+                        <span className="text-xs font-bold text-gray-400 uppercase mb-2 block">Связанные темы:</span>
+                        <div className="flex flex-wrap gap-2">
+                          {comp.related_topics.map((topic, j) => (
+                            <span key={j} className="bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 px-2 py-1 rounded text-xs border border-purple-100 dark:border-purple-800">
+                              {topic}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -543,7 +584,7 @@ function MainApp() {
               disabled={loading}
               className="w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white py-4 rounded-xl font-bold text-lg hover:shadow-xl hover:shadow-green-500/30 disabled:opacity-50 flex items-center justify-center gap-3 transition-all"
             >
-              {loading ? <><Loader2 className="w-6 h-6 animate-spin" /> Генерирую материалы...</> : <><CheckCircle2 className="w-6 h-6" /> Утвердить и продолжить</>}
+              {loading ? <><Loader2 className="w-6 h-6 animate-spin" /> {loaderText}</> : <><CheckCircle2 className="w-6 h-6" /> Утвердить и продолжить</>}
             </button>
           </div>
         )}
@@ -563,7 +604,6 @@ function MainApp() {
               </div>
             </div>
 
-            {/* Кнопка "Новый проект" на экране результата */}
             <button
               onClick={handleRestart}
               className="flex items-center justify-center gap-2 w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 py-3 rounded-xl font-bold hover:bg-gray-50 dark:hover:bg-gray-700 transition-all"
@@ -571,7 +611,6 @@ function MainApp() {
               <RotateCcw className="w-5 h-5" /> Создать новую программу
             </button>
 
-            {/* ВИДЖЕТ АНАЛИТИКИ (ТОЛЬКО ТОКЕНЫ И РУБЛИ) */}
             {analytics && (
               <div className="flex gap-2 sm:gap-4 p-4 bg-white dark:bg-gray-800 rounded-2xl border border-blue-100 dark:border-blue-900/50 shadow-lg">
                 <div className="flex-1 text-center border-r border-gray-100 dark:border-gray-700">
@@ -662,18 +701,30 @@ function MainApp() {
               </div>
             )}
 
-            {content.content?.bibliography && content.content.bibliography.length > 0 && (
+            {/* БИБЛИОГРАФИЯ (обновленная) */}
+            {content.content?.bibliography && Array.isArray(content.content.bibliography) && (
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-6">
-                <div className="flex items-center gap-2 text-sm font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-4">
-                  <Library className="w-5 h-5" /> Библиография
-                </div>
-                <ul className="space-y-2 text-sm">
-                  {content.content.bibliography.map((book, idx) => (
-                    <li key={idx} className="flex items-start gap-2 text-gray-700 dark:text-gray-300">
-                      <span className="text-indigo-500 font-bold mt-0.5">[{idx + 1}]</span>
-                      <span>{typeof book === 'string' ? book : JSON.stringify(book)}</span>
-                    </li>
-                  ))}
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-teal-600 dark:text-teal-400">
+                  <Library className="w-5 h-5" /> Список литературы
+                </h3>
+                <ul className="list-decimal pl-5 text-sm space-y-3 text-gray-700 dark:text-gray-300">
+                  {content.content.bibliography.map((book, idx) => {
+                    if (typeof book === 'string') {
+                      return <li key={idx}>{book}</li>;
+                    }
+                    if (typeof book === 'object' && book !== null) {
+                      const author = (book as any).author || '';
+                      const title = (book as any).title || '';
+                      const year = (book as any).year || '';
+                      const url = (book as any).url ? ` (${(book as any).url})` : '';
+                      return (
+                        <li key={idx}>
+                          {author}. <strong>{title}</strong>. {year} г.{url}
+                        </li>
+                      );
+                    }
+                    return null;
+                  })}
                 </ul>
               </div>
             )}
