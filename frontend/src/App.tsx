@@ -5,7 +5,7 @@ import {
   FileText, BookOpen, GraduationCap, RotateCcw, 
   Sparkles, FileDown, Presentation, Moon, Sun,
   Minus, Plus, AlertCircle, Paperclip, X, Library,
-  TrendingUp, Coins, Cpu
+  Coins, Cpu
 } from 'lucide-react';
 import { 
   generateFramework, 
@@ -571,13 +571,9 @@ function MainApp() {
               <RotateCcw className="w-5 h-5" /> Создать новую программу
             </button>
 
-            {/* ВИДЖЕТ АНАЛИТИКИ */}
+            {/* ВИДЖЕТ АНАЛИТИКИ (ТОЛЬКО ТОКЕНЫ И РУБЛИ) */}
             {analytics && (
               <div className="flex gap-2 sm:gap-4 p-4 bg-white dark:bg-gray-800 rounded-2xl border border-blue-100 dark:border-blue-900/50 shadow-lg">
-                <div className="flex-1 text-center border-r border-gray-100 dark:border-gray-700">
-                  <div className="text-xl sm:text-2xl font-extrabold text-blue-600 dark:text-blue-400">{analytics.completed_programs}</div>
-                  <div className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wide mt-1 flex items-center justify-center gap-1"><TrendingUp className="w-3 h-3"/> Программ</div>
-                </div>
                 <div className="flex-1 text-center border-r border-gray-100 dark:border-gray-700">
                   <div className="text-xl sm:text-2xl font-extrabold text-purple-600 dark:text-purple-400">{analytics.total_tokens_used.toLocaleString()}</div>
                   <div className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wide mt-1 flex items-center justify-center gap-1"><Cpu className="w-3 h-3"/> Токенов</div>
