@@ -87,7 +87,7 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
         for res in results:
             task_obj, data, tokens, cost, is_success = res
             key = task_obj.target_key
-            mod_title = task_obj.module_title # <--- Берем название модуля из задачи
+            mod_title = task_obj.module_title
             total_tokens += tokens
             total_cost += cost
             
@@ -102,11 +102,10 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
             elif key == "tests":
                 final_content[key].extend(validate_test_format(items))
             elif key == "seminars":
-                # [ФИКС]: Принудительно подставляем правильное название модуля
                 for item in items:
                     if isinstance(item, dict):
                         final_content["seminars"].append({
-                            "module_title": mod_title,
+                            "module_title": mod_title, # Берем из задачи
                             "task": _force_string(item.get("task", str(item))),
                             "criteria": _force_string(item.get("criteria", "Критерии не указаны")),
                             "related_competency": item.get("related_competency", "Общая")
@@ -116,7 +115,7 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                     if isinstance(item, dict):
                         desc = item.get("description") or item.get("content") or str(item)
                         final_content["work_programs"].append({
-                            "module_title": mod_title,
+                            "module_title": mod_title, # Берем из задачи
                             "description": _force_string(desc)
                         })
             elif key == "lectures":
@@ -125,7 +124,7 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                         theses = item.get("theses") or item.get("content") or item.get("subtopics")
                         if not isinstance(theses, list): theses = [str(theses)]
                         final_content["lectures"].append({
-                            "module_title": mod_title,
+                            "module_title": mod_title, # Берем из задачи
                             "theses": [_force_string(t) for t in theses]
                         })
             elif key == "slides":
@@ -133,7 +132,7 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                     if isinstance(item, dict):
                         final_content["slides"].append({
                             "slide_type": item.get("slide_type", "content"),
-                            "title": item.get("title", item.get("header", f"Слайд: {mod_title}")),
+                            "title": item.get("title", item.get("header", "Слайд")),
                             "bullets": item.get("bullets") or item.get("bullet_points") or [item.get("description", "")],
                             "speaker_notes": item.get("speaker_notes", "")
                         })
@@ -143,7 +142,11 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
             logger.warning(f"Пауза 5 секунд перед повтором {len(pending_tasks)} задач...")
             await asyncio.sleep(5)
 
-    # --- ДОБИВКА (если чего-то нет) ---
+    # ==========================================
+    # ФИНАЛЬНАЯ ДОБИВКА (если чего-то нет)
+    # ==========================================
+    
+    # 1. Тесты
     target_q = max(config.MIN_QUESTIONS, framework.total_hours // config.QUESTIONS_PER_HOURS)
     while len(final_content["tests"]) < target_q:
         mod_title = framework.modules[len(final_content["tests"]) % len(framework.modules)].title if framework.modules else "программе"
@@ -151,6 +154,7 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
         fallback_test["category"] = mod_title
         final_content["tests"].append(fallback_test)
 
+    # 2. Лекции и Семинары (проверяем каждый модуль)
     for mod in framework.modules:
         if not any(mod.title.lower() in str(l.get("module_title", "")).lower() for l in final_content["lectures"]):
             final_content["lectures"].append(_rule_based_fallback_lecture(framework, mod.title))
@@ -160,8 +164,11 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
             
         if not any(mod.title.lower() in str(wp.get("module_title", "")).lower() for wp in final_content["work_programs"]):
             final_content["work_programs"].append({"module_title": mod.title, "description": "ОШИБКА ГЕНЕРАЦИИ."})
-            
-        if not any(mod.title.lower() in str(sl.get("title", "")).lower() or mod.title.lower() in str(sl.get("module_title", "")).lower() for sl in final_content["slides"]):
+
+    # 3. Слайды (проверяем только если массив вообще пустой)
+    # Так как мы генерируем их пачками по 10 штук, они могут не иметь привязки к модулю.
+    if not final_content["slides"]:
+        for mod in framework.modules:
             final_content["slides"].append({
                 "slide_type": "content",
                 "title": f"Модуль: {mod.title}",
@@ -169,6 +176,7 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                 "speaker_notes": "Автоматическая заглушка."
             })
 
+    # 4. Библиография
     if not final_content["bibliography"]:
         final_content["bibliography"] = _rule_based_fallback_bibliography(framework)
 
