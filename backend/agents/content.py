@@ -1,6 +1,6 @@
+import re
 import json
 import asyncio
-import re
 from cloud import ask_llm, MODEL_FAST
 from schemas import Framework
 from utils.json_parser import extract_json_from_text
@@ -10,6 +10,10 @@ from logger import logger
 # [АРХИТЕКТУРА]: Глобальный семафор для ограничения параллельных запросов к LLM
 MAX_CONCURRENT_REQUESTS = config.MAX_CONCURRENT_REQUESTS
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+# ==========================================
+# [УТИЛИТЫ]: Вспомогательные функции
+# ==========================================
 
 def clean_text_field(text: any) -> str:
     """
@@ -33,12 +37,10 @@ def validate_test_format(data: list) -> list:
     for item in data:
         if isinstance(item, dict) and item.get("question"):
             options = item.get("options", [])
-            # Защита: если options не список, превращаем в список
             if not isinstance(options, list):
                 options = [str(options)]
             
             correct = clean_text_field(item.get("correct_answer", ""))
-            # Проверяем, есть ли правильный ответ в списке опций
             if options and correct in options:
                 valid_tests.append({
                     "question": clean_text_field(item["question"]),
@@ -64,6 +66,10 @@ def validate_seminar_format(data: list) -> list:
                 "related_competency": clean_text_field(item.get("related_competency", "Общая"))
             })
     return valid_seminars
+
+# ==========================================
+# [УРОВЕНЬ 2]: Fallback-сообщения об ошибках
+# ==========================================
 
 def _rule_based_fallback_seminar(framework: Framework, mod_title: str, mod_hours: int) -> dict:
     logger.warning(f"Сбой генерации семинара для модуля '{mod_title}'.")
