@@ -1,7 +1,8 @@
 import os
 import asyncio
 from urllib.parse import urlparse
-from openai import AsyncOpenAI, APITimeoutError, APIConnectionError
+from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, BadRequestError
+from typing import Optional, Dict, Any
 
 # [ТРЕБОВАНИЕ КЕЙСА]: Жесткая фиксация провайдера (только Cloud.ru)
 ALLOWED_DOMAINS = ["gigaschool.ru", "cloud.ru", "sber.ru"]
@@ -13,50 +14,65 @@ if not any(domain in parsed_url.netloc for domain in ALLOWED_DOMAINS):
 
 api_key = os.getenv("OPENAI_API_KEY", "")
 
-# [ФИКС АРХИТЕКТУРЫ]: Используем AsyncOpenAI для неблокирующих запросов
+# [АРХИТЕКТУРА]: AsyncOpenAI для неблокирующих запросов
 client = AsyncOpenAI(api_key=api_key or "dummy", base_url=base_url, timeout=120.0)
 
 MODEL_FAST = "GigaChat/GigaChat-3-Pro"
 MODEL_REASONING = "ai-sage/GigaChat3.5-432B-A28B-Reasoning"
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Цены Cloud.ru за 1 млн токенов
 MODEL_PRICING = {
     MODEL_FAST: {"input": 73.03, "output": 176.39},
     MODEL_REASONING: {"input": 96.22, "output": 288.60}
 }
 
 class LLMServiceError(Exception):
-    """[ТРЕБОВАНИЕ КЕЙСА]: Кастомное исключение для структурированной обработки ошибок."""
     def __init__(self, message: str, status_code: int = 500):
         self.message = message
         self.status_code = status_code
         super().__init__(self.message)
 
 class LLMRouter:
-    """[АРХИТЕКТУРА]: Выбор модели под задачу."""
     @staticmethod
     def get_model_for_task(task_type: str) -> str:
-        # Для сложной логики используем Reasoning, для текста — Fast
         if task_type in ["framework", "validation", "revision", "slides"]:
             return MODEL_REASONING
         return MODEL_FAST
 
-async def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False) -> tuple[str, int, float]:
+async def ask_llm(
+    prompt: str, 
+    task_type: str = "content", 
+    is_json: bool = False,
+    json_schema: Optional[Dict[str, Any]] = None,
+    schema_name: str = "default_schema"
+) -> tuple[str, int, float]:
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Асинхронный вызов LLM.
-    Возвращает кортеж: (текст_ответа, потрачено_токенов, стоимость_в_рублях).
+    [УЛУЧШЕНИЕ]: Поддерживает нативную передачу JSON-схемы (Structured Output).
+    Если шлюз не поддерживает схемы, автоматически откатывается на json_object.
     """
     model = LLMRouter.get_model_for_task(task_type)
     
     kwargs = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 10000 # Увеличенный лимит для больших JSON
+        "max_tokens": 10000
     }
-    if is_json:
+    
+    # [ФИКС]: Изначально пытаемся использовать строгую схему
+    if json_schema:
+        kwargs["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema_name,
+                "schema": json_schema,
+                "strict": True
+            }
+        }
+    elif is_json:
         kwargs["response_format"] = {"type": "json_object"}
 
-    # [ТРЕБОВАНИЕ КЕЙСА]: 3 попытки с экспоненциальной задержкой
+    schema_fallback_triggered = False
+
     for attempt in range(3):
         try:
             response = await client.chat.completions.create(**kwargs)
@@ -66,8 +82,6 @@ async def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False
                 raise ValueError("Модель вернула пустой ответ.")
                 
             usage = response.usage
-            
-            # [УНИКАЛЬНАЯ ФИЧА]: Калькулятор стоимости
             pricing = MODEL_PRICING.get(model, {"input": 0, "output": 0})
             input_cost = (usage.prompt_tokens / 1_000_000) * pricing["input"]
             output_cost = (usage.completion_tokens / 1_000_000) * pricing["output"]
@@ -77,11 +91,20 @@ async def ask_llm(prompt: str, task_type: str = "content", is_json: bool = False
             
             return content, usage.total_tokens, total_cost
             
+        except BadRequestError as e:
+            # [ФИКС]: Шлюз не поддерживает json_schema (ошибка 400). Переключаемся на обычный JSON.
+            if json_schema and not schema_fallback_triggered:
+                print(f"[WARNING] Шлюз отклонил json_schema. Переключение на json_object...")
+                kwargs["response_format"] = {"type": "json_object"}
+                schema_fallback_triggered = True
+                continue # Повторяем попытку без увеличения счетчика
+            if attempt == 2: raise LLMServiceError(f"Ошибка запроса к LLM: {str(e)}", status_code=500)
+            await asyncio.sleep(2)
+            
         except (APITimeoutError, APIConnectionError) as e:
-            if attempt == 2: 
-                raise LLMServiceError(f"Таймаут LLM: {str(e)}", status_code=504)
+            if attempt == 2: raise LLMServiceError(f"Таймаут LLM: {str(e)}", status_code=504)
             await asyncio.sleep(3)
+            
         except Exception as e:
-            if attempt == 2: 
-                raise LLMServiceError(f"Ошибка LLM: {str(e)}", status_code=500)
+            if attempt == 2: raise LLMServiceError(f"Ошибка LLM: {str(e)}", status_code=500)
             await asyncio.sleep(2)

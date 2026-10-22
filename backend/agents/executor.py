@@ -1,7 +1,10 @@
 import json
 import asyncio
 from cloud import ask_llm, MODEL_FAST
-from schemas import ExecutionPlan, Framework, ContentPack
+from schemas import (
+    ExecutionPlan, Framework, ContentPack,
+    TestQuestion, SeminarTask, LecturePlan, Slide, WorkProgram
+)
 from utils.json_parser import extract_json_from_text
 from agents.content import (
     _rule_based_fallback_test, 
@@ -17,8 +20,18 @@ from logger import logger
 MAX_CONCURRENT_REQUESTS = config.MAX_CONCURRENT_REQUESTS
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
+# [УЛУЧШЕНИЕ]: Генерируем строгие JSON-схемы из Pydantic-моделей
+SCHEMAS = {
+    "tests": {"type": "array", "items": TestQuestion.model_json_schema()},
+    "lectures": {"type": "array", "items": LecturePlan.model_json_schema()},
+    "seminars": {"type": "array", "items": SeminarTask.model_json_schema()},
+    "slides": {"type": "array", "items": Slide.model_json_schema()},
+    "work_programs": {"type": "array", "items": WorkProgram.model_json_schema()},
+    "bibliography": {"type": "array", "items": {"type": "string"}}
+}
+
 def _extract_list_from_response(data: any) -> list:
-    """[УТИЛИТА]: Пытается вытащить массив из ответа LLM, даже если он обернут в объект."""
+    """[УТИЛИТА]: Извлекает массив из ответа LLM, если он обернут в объект."""
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
@@ -29,14 +42,25 @@ def _extract_list_from_response(data: any) -> list:
     return []
 
 async def _execute_single_task(task, retries: int = 3) -> tuple[str, any, int, float]:
-    """[АРХИТЕКТУРА]: Выполняет одну задачу из плана."""
+    """[АРХИТЕКТУРА]: Выполняет одну задачу с использованием Strict JSON Schema."""
     total_tokens = 0
     total_cost = 0.0
     
+    # Получаем схему для конкретного типа контента
+    schema = SCHEMAS.get(task.target_key)
+    schema_name = f"{task.target_key}_schema"
+
     async with semaphore:
         for attempt in range(retries):
             try:
-                raw, tokens, cost = await ask_llm(task.prompt, task_type="content", is_json=True)
+                # [ФИКС]: Передаем схему в ask_llm для нативного Structured Output
+                raw, tokens, cost = await ask_llm(
+                    task.prompt, 
+                    task_type="content", 
+                    is_json=True,
+                    json_schema=schema,
+                    schema_name=schema_name
+                )
                 total_tokens += tokens
                 total_cost += cost
                 
@@ -48,6 +72,7 @@ async def _execute_single_task(task, retries: int = 3) -> tuple[str, any, int, f
                 if attempt == retries - 1:
                     logger.info(f"Запуск LLM-fallback для [{task.target_key}]...")
                     try:
+                        # Фоллбэк без строгой схемы (просто просим JSON)
                         fb_prompt = f"Сгенерируй данные для '{task.target_key}' в формате JSON. Контекст: {task.prompt[:200]}"
                         raw_fb, t_fb, c_fb = await ask_llm(fb_prompt, MODEL_FAST, True)
                         total_tokens += t_fb
@@ -73,7 +98,7 @@ def _rule_based_fallback_slide(framework: Framework, mod_title: str) -> dict:
 async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict, int, float]:
     """
     [АРХИТЕКТУРА]: Исполнитель плана.
-    Собирает контент, помечает разделы с ошибками генерации.
+    Выполняет задачи параллельно, валидирует и собирает контент.
     """
     logger.info(f"Запуск Исполнителя. В плане {len(plan.tasks)} задач.")
     
