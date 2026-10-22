@@ -2,9 +2,8 @@ import os
 import asyncio
 from urllib.parse import urlparse
 from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, RateLimitError
-from typing import Optional
 
-# [ТРЕБОВАНИЕ КЕЙСА]: Жесткая фиксация провайдера (только Cloud.ru)
+# [ТРЕБОВАНИЕ КЕЙСА]: Жесткая фиксация провайдера
 ALLOWED_DOMAINS = ["gigaschool.ru", "cloud.ru", "sber.ru"]
 base_url = os.getenv("OPENAI_BASE_URL", "https://hub.gigaschool.ru/api/v1/llm/v1")
 
@@ -14,7 +13,8 @@ if not any(domain in parsed_url.netloc for domain in ALLOWED_DOMAINS):
 
 api_key = os.getenv("OPENAI_API_KEY", "")
 
-client = AsyncOpenAI(api_key=api_key or "dummy", base_url=base_url, timeout=120.0)
+# Увеличили таймаут до 180 секунд, так как теперь мы просим текст, а не жесткий JSON
+client = AsyncOpenAI(api_key=api_key or "dummy", base_url=base_url, timeout=180.0)
 
 MODEL_FAST = "GigaChat/GigaChat-3-Pro"
 MODEL_REASONING = "ai-sage/GigaChat3.5-432B-A28B-Reasoning"
@@ -41,15 +41,14 @@ async def ask_llm(
     prompt: str, 
     system_prompt: str = None,
     task_type: str = "content", 
-    is_json: bool = False
+    is_json: bool = False # [ФИКС]: Мы оставили параметр для совместимости, но больше не используем его для шлюза
 ) -> tuple[str, int, float]:
     """
-    [УЛУЧШЕНИЕ]: Разделяем System Prompt и User Prompt.
-    Это заставляет модель строго следовать формату (JSON, без markdown).
+    [ЯДЕРНЫЙ ФИКС]: Убрали response_format. 
+    Теперь мы просим модель выдавать чистый текст, а не JSON.
     """
     model = LLMRouter.get_model_for_task(task_type)
     
-    # [ФИКС]: Формируем массив сообщений с системным промптом
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -58,11 +57,9 @@ async def ask_llm(
     kwargs = {
         "model": model,
         "messages": messages,
-        "max_tokens": 8000
+        "max_tokens": 8000,
+        # "response_format": {"type": "json_object"}  <--- ПОЛНОСТЬЮ УДАЛЕНО
     }
-    
-    if is_json:
-        kwargs["response_format"] = {"type": "json_object"}
 
     for attempt in range(4):
         try:

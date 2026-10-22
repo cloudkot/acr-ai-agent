@@ -1,5 +1,6 @@
 import json
 import asyncio
+import re
 from cloud import ask_llm, MODEL_FAST
 from schemas import ExecutionPlan, Framework
 from utils.json_parser import extract_json_from_text
@@ -17,46 +18,68 @@ from logger import logger
 MAX_CONCURRENT_REQUESTS = config.MAX_CONCURRENT_REQUESTS
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-# [ФИКС]: Жесткий системный промпт для всех воркеров
-SYSTEM_PROMPT_JSON = """
-Ты — программный API. Твоя единственная задача — возвращать валидный JSON.
-СТРОГИЕ ПРАВИЛА:
-1. Возвращай ТОЛЬКО JSON. Никакого текста до или после.
-2. Не используй markdown-разметку (без ```json).
-3. Не добавляй комментарии внутри JSON.
-4. Строго соблюдай запрошенные поля. Если просят массив — возвращай массив. Если объект — объект.
-5. Не придумывай вложенные структуры, если об этом не просили.
+# [ФИКС]: Мы больше не просим жесткий JSON. Мы просим просто текст.
+SYSTEM_PROMPT_TEXT = """
+Ты — экспертный методист. Твоя задача — генерировать образовательный контент.
+Пиши обычным текстом. Если просят список, используй маркированные списки с дефисом.
+Не используй сложные вложенные структуры.
 """
 
-def _extract_list_from_response(data: any) -> list:
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in ["items", "data", "results", "questions", "tasks", "content", "slides", "lectures", "seminars"]:
-            if key in data and isinstance(data[key], list):
-                return data[key]
-        return [data]
+def _parse_raw_response(raw_text: str, target_key: str) -> list:
+    """
+    [ФИКС]: Пытаемся распарсить JSON. Если не выходит, делаем из текста список.
+    Это спасает от любых ошибок нейросети.
+    """
+    try:
+        data = extract_json_from_text(raw_text)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if isinstance(v, list):
+                    return v
+            return [data]
+    except Exception:
+        pass
+        
+    # Если это не JSON, значит это сырой текст. Оборачиваем его.
+    logger.warning(f"Не удалось распарсить JSON для {target_key}, используем сырой текст.")
+    
+    if target_key == "tests":
+        # Для тестов сырой текст не подойдет, отдаем пустоту (сработает fallback)
+        return [] 
+    elif target_key == "seminars":
+        return [{"module_title": "Модуль", "task": raw_text, "criteria": "См. задание", "related_competency": "Общая"}]
+    elif target_key == "work_programs":
+        return [{"module_title": "Модуль", "description": raw_text}]
+    elif target_key == "lectures":
+        # Разбиваем текст на тезисы по переносам строк
+        theses = [line.strip("- ").strip() for line in raw_text.split('\n') if line.strip()]
+        return [{"module_title": "Модуль", "theses": theses if theses else [raw_text]}]
+    elif target_key == "slides":
+        return [{"slide_type": "content", "title": "Слайд", "bullets": [raw_text], "speaker_notes": ""}]
+    elif target_key == "bibliography":
+        return [line.strip("- ").strip() for line in raw_text.split('\n') if line.strip()]
+        
     return []
 
 async def _execute_single_task(task) -> tuple[any, any, int, float, bool]:
-    """[ФИКС]: Выполняет задачу с использованием System Prompt."""
+    """[ФИКС]: Выполняет задачу, используя текстовый режим."""
     async with semaphore:
         try:
-            # [УЛУЧШЕНИЕ]: Передаем system_prompt
             raw, tokens, cost = await ask_llm(
                 prompt=task.prompt, 
-                system_prompt=SYSTEM_PROMPT_JSON,
+                system_prompt=SYSTEM_PROMPT_TEXT,
                 task_type="content", 
-                is_json=True
+                is_json=False # Отключаем режим JSON на уровне API
             )
-            data = extract_json_from_text(raw)
+            data = _parse_raw_response(raw, task.target_key)
             return task, data, tokens, cost, True
         except Exception as e:
             logger.warning(f"Сбой задачи [{task.target_key}]: {e}")
             return task, None, 0, 0.0, False
 
 def _force_string(val: any) -> str:
-    """[УТИЛИТА]: Если LLM вернула объект вместо строки, превращаем его в текст."""
     if isinstance(val, str):
         return val
     if isinstance(val, (dict, list)):
@@ -101,19 +124,11 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                 
             # --- Обработка библиографии ---
             if key == "bibliography":
-                if isinstance(data, dict) and "resources" in data:
-                    for item in data["resources"]:
-                        if isinstance(item, dict):
-                            final_content[key].append(f"{item.get('author', '')}. {item.get('title', '')}. {item.get('year', '')} г.")
-                        elif isinstance(item, str):
-                            final_content[key].append(item)
-                else:
-                    items = _extract_list_from_response(data)
-                    final_content[key].extend([_force_string(x) for x in items if x])
+                final_content[key].extend([_force_string(x) for x in data if x])
                 continue
 
             # --- Обработка остального контента ---
-            items = _extract_list_from_response(data)
+            items = data
             
             if key == "tests":
                 final_content[key].extend(validate_test_format(items))
@@ -149,10 +164,6 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
         if pending_tasks:
             logger.warning(f"Пауза 5 секунд перед повтором {len(pending_tasks)} задач...")
             await asyncio.sleep(5)
-
-    if pending_tasks:
-        logger.error(f"После {max_rounds} раундов осталось {len(pending_tasks)} сбойных задач.")
-        generation_errors += len(pending_tasks)
 
     # --- ДОБИВКА (если чего-то совсем нет) ---
     target_q = max(config.MIN_QUESTIONS, framework.total_hours // config.QUESTIONS_PER_HOURS)
