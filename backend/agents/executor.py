@@ -18,62 +18,36 @@ from logger import logger
 MAX_CONCURRENT_REQUESTS = config.MAX_CONCURRENT_REQUESTS
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-# [ФИКС]: Мы больше не просим жесткий JSON. Мы просим просто текст.
-SYSTEM_PROMPT_TEXT = """
-Ты — экспертный методист. Твоя задача — генерировать образовательный контент.
-Пиши обычным текстом. Если просят список, используй маркированные списки с дефисом.
-Не используй сложные вложенные структуры.
+# [ФИКС]: Возвращаем жесткий системный промпт для JSON
+SYSTEM_PROMPT_JSON = """
+Ты — программный API. Твоя единственная задача — возвращать валидный JSON.
+СТРОГИЕ ПРАВИЛА:
+1. Возвращай ТОЛЬКО JSON. Никакого текста до или после.
+2. Не используй markdown-разметку (без ```json).
+3. Не добавляй комментарии внутри JSON.
+4. Строго соблюдай запрошенные поля. Если просят массив — возвращай массив.
 """
 
-def _parse_raw_response(raw_text: str, target_key: str) -> list:
-    """
-    [ФИКС]: Пытаемся распарсить JSON. Если не выходит, делаем из текста список.
-    Это спасает от любых ошибок нейросети.
-    """
-    try:
-        data = extract_json_from_text(raw_text)
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            for k, v in data.items():
-                if isinstance(v, list):
-                    return v
-            return [data]
-    except Exception:
-        pass
-        
-    # Если это не JSON, значит это сырой текст. Оборачиваем его.
-    logger.warning(f"Не удалось распарсить JSON для {target_key}, используем сырой текст.")
-    
-    if target_key == "tests":
-        # Для тестов сырой текст не подойдет, отдаем пустоту (сработает fallback)
-        return [] 
-    elif target_key == "seminars":
-        return [{"module_title": "Модуль", "task": raw_text, "criteria": "См. задание", "related_competency": "Общая"}]
-    elif target_key == "work_programs":
-        return [{"module_title": "Модуль", "description": raw_text}]
-    elif target_key == "lectures":
-        # Разбиваем текст на тезисы по переносам строк
-        theses = [line.strip("- ").strip() for line in raw_text.split('\n') if line.strip()]
-        return [{"module_title": "Модуль", "theses": theses if theses else [raw_text]}]
-    elif target_key == "slides":
-        return [{"slide_type": "content", "title": "Слайд", "bullets": [raw_text], "speaker_notes": ""}]
-    elif target_key == "bibliography":
-        return [line.strip("- ").strip() for line in raw_text.split('\n') if line.strip()]
-        
+def _extract_list_from_response(data: any) -> list:
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ["items", "data", "results", "questions", "tasks", "content", "slides", "lectures", "seminars"]:
+            if key in data and isinstance(data[key], list):
+                return data[key]
+        return [data]
     return []
 
 async def _execute_single_task(task) -> tuple[any, any, int, float, bool]:
-    """[ФИКС]: Выполняет задачу, используя текстовый режим."""
     async with semaphore:
         try:
             raw, tokens, cost = await ask_llm(
                 prompt=task.prompt, 
-                system_prompt=SYSTEM_PROMPT_TEXT,
+                system_prompt=SYSTEM_PROMPT_JSON, # <--- ИСПОЛЬЗУЕМ СТРОГИЙ ПРОМПТ
                 task_type="content", 
-                is_json=False # Отключаем режим JSON на уровне API
+                is_json=False # Отключено на уровне API
             )
-            data = _parse_raw_response(raw, task.target_key)
+            data = extract_json_from_text(raw)
             return task, data, tokens, cost, True
         except Exception as e:
             logger.warning(f"Сбой задачи [{task.target_key}]: {e}")
@@ -96,7 +70,6 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
     
     total_tokens = 0
     total_cost = 0.0
-    generation_errors = 0
     
     pending_tasks = list(plan.tasks)
     max_rounds = 3
@@ -122,15 +95,12 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                 next_pending.append(task_obj)
                 continue
                 
-            # --- Обработка библиографии ---
-            if key == "bibliography":
-                final_content[key].extend([_force_string(x) for x in data if x])
-                continue
-
-            # --- Обработка остального контента ---
-            items = data
+            # --- Обработка контента ---
+            items = _extract_list_from_response(data)
             
-            if key == "tests":
+            if key == "bibliography":
+                final_content[key].extend([_force_string(x) for x in items if x])
+            elif key == "tests":
                 final_content[key].extend(validate_test_format(items))
             elif key == "seminars":
                 final_content[key].extend(validate_seminar_format(items))
@@ -165,7 +135,11 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
             logger.warning(f"Пауза 5 секунд перед повтором {len(pending_tasks)} задач...")
             await asyncio.sleep(5)
 
-    # --- ДОБИВКА (если чего-то совсем нет) ---
+    # ==========================================
+    # [ФИКС]: ДОБИВКА (если чего-то нет)
+    # ==========================================
+    
+    # 1. Тесты
     target_q = max(config.MIN_QUESTIONS, framework.total_hours // config.QUESTIONS_PER_HOURS)
     while len(final_content["tests"]) < target_q:
         mod_title = framework.modules[len(final_content["tests"]) % len(framework.modules)].title if framework.modules else "программе"
@@ -173,13 +147,25 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
         fallback_test["category"] = mod_title
         final_content["tests"].append(fallback_test)
 
+    # 2. Лекции, Семинары, Рабочие программы, Слайды
     for mod in framework.modules:
         if not any(mod.title.lower() in str(l.get("module_title", "")).lower() for l in final_content["lectures"]):
             final_content["lectures"].append(_rule_based_fallback_lecture(framework, mod.title))
+            
         if not any(mod.title.lower() in str(s.get("module_title", "")).lower() for s in final_content["seminars"]):
             final_content["seminars"].append(_rule_based_fallback_seminar(framework, mod.title, mod.total_hours))
+            
         if not any(mod.title.lower() in str(wp.get("module_title", "")).lower() for wp in final_content["work_programs"]):
             final_content["work_programs"].append({"module_title": mod.title, "description": "ОШИБКА ГЕНЕРАЦИИ."})
+            
+        # [ФИКС]: Добавлена проверка для слайдов, чтобы презентация не была пустой
+        if not any(mod.title.lower() in str(sl.get("title", "")).lower() or mod.title.lower() in str(sl.get("module_title", "")).lower() for sl in final_content["slides"]):
+            final_content["slides"].append({
+                "slide_type": "content",
+                "title": f"Модуль: {mod.title}",
+                "bullets": ["Сбой генерации слайда.", "Повторите генерацию."],
+                "speaker_notes": "Автоматическая заглушка."
+            })
 
     if not final_content["bibliography"]:
         final_content["bibliography"] = _rule_based_fallback_bibliography(framework)
