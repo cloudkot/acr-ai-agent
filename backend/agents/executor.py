@@ -18,7 +18,6 @@ MAX_CONCURRENT_REQUESTS = config.MAX_CONCURRENT_REQUESTS
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 def _extract_list_from_response(data: any) -> list:
-    """[УТИЛИТА]: Извлекает массив из ответа LLM (даже если это батч из нескольких модулей)."""
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
@@ -28,16 +27,16 @@ def _extract_list_from_response(data: any) -> list:
         return [data]
     return []
 
-async def _execute_single_task(task) -> tuple[str, any, int, float, bool]:
-    """[АРХИТЕКТУРА]: Одна попытка выполнить задачу."""
+async def _execute_single_task(task) -> tuple[any, any, int, float, bool]:
+    """[ФИКС]: Возвращаем сам объект task, чтобы не терять задачи в очереди."""
     async with semaphore:
         try:
             raw, tokens, cost = await ask_llm(task.prompt, task_type="content", is_json=True)
             data = extract_json_from_text(raw)
-            return task.target_key, data, tokens, cost, True
+            return task, data, tokens, cost, True
         except Exception as e:
             logger.warning(f"Сбой задачи [{task.target_key}]: {e}")
-            return task.target_key, None, 0, 0.0, False
+            return task, None, 0, 0.0, False
 
 def _rule_based_fallback_slide(framework: Framework, mod_title: str) -> dict:
     return {
@@ -48,10 +47,6 @@ def _rule_based_fallback_slide(framework: Framework, mod_title: str) -> dict:
     }
 
 async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict, int, float]:
-    """
-    [АРХИТЕКТУРА]: Исполнитель плана с очередью повторных попыток.
-    Увеличены паузы для предотвращения Rate Limit от шлюза GigaChat.
-    """
     logger.info(f"Запуск Исполнителя. В плане {len(plan.tasks)} задач.")
     
     final_content = {
@@ -64,13 +59,13 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
     generation_errors = 0
     
     pending_tasks = list(plan.tasks)
-    max_rounds = 4 # Увеличили до 4 раундов (1 основная + 3 повторных)
+    max_rounds = 4
     
     for round_num in range(max_rounds):
         if not pending_tasks:
             break
             
-        logger.info(f"Раунд выполнения {round_num + 1}/{max_rounds}. Осталось задач: {len(pending_tasks)}")
+        logger.info(f"Раунд {round_num + 1}/{max_rounds}. Задач в очереди: {len(pending_tasks)}")
         
         tasks = [_execute_single_task(task) for task in pending_tasks]
         results = await asyncio.gather(*tasks)
@@ -78,16 +73,15 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
         next_pending = []
         
         for res in results:
-            key, data, tokens, cost, is_success = res
+            task_obj, data, tokens, cost, is_success = res
+            key = task_obj.target_key
             total_tokens += tokens
             total_cost += cost
             
             if not is_success or data is None:
-                failed_task = next(t for t in pending_tasks if t.target_key == key)
-                next_pending.append(failed_task)
+                next_pending.append(task_obj) # [ФИКС]: Возвращаем именно эту задачу
                 continue
                 
-            # Обработка библиографии
             if key == "bibliography":
                 if isinstance(data, dict) and "resources" in data:
                     for item in data["resources"]:
@@ -100,7 +94,6 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                     final_content[key].extend([str(x) for x in items if isinstance(x, str)])
                 continue
 
-            # Обработка остального контента (батчи)
             items = _extract_list_from_response(data)
             if key == "tests":
                 final_content[key].extend(validate_test_format(items))
@@ -112,7 +105,6 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
 
         pending_tasks = next_pending
         if pending_tasks:
-            # [ФИКС]: Увеличили паузу до 10 секунд, чтобы шлюз "остыл"
             logger.warning(f"Rate Limit защита: пауза 10 секунд перед повтором {len(pending_tasks)} задач...")
             await asyncio.sleep(10)
 
@@ -120,9 +112,8 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
         logger.error(f"После {max_rounds} раундов осталось {len(pending_tasks)} сбойных задач.")
         generation_errors += len(pending_tasks)
 
-    logger.info("Проверка полноты сгенерированного контента...")
+    logger.info("Проверка полноты...")
     
-    # 1. Тесты
     target_q = max(config.MIN_QUESTIONS, framework.total_hours // config.QUESTIONS_PER_HOURS)
     final_content["tests"] = final_content["tests"][:target_q]
     
@@ -137,7 +128,6 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
         final_content["tests"].append(fallback_test)
         generation_errors += 1
 
-    # 2. Лекции, Семинары, Слайды, Рабочие программы
     for mod in framework.modules:
         if not any(mod.title.lower() in str(l.get("module_title", "")).lower() for l in final_content["lectures"]):
             final_content["lectures"].append(_rule_based_fallback_lecture(framework, mod.title))

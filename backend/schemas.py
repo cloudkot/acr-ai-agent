@@ -3,10 +3,10 @@ from typing import List, Literal, Optional
 import re
 
 class Competency(BaseModel):
-    name: str = Field(..., description="Название компетенции")
-    knowledge: List[str] = Field(..., min_items=1)
-    skills: List[str] = Field(..., min_items=1)
-    related_topics: List[str] = Field(default_factory=list, description="Модули, где формируется компетенция")
+    name: str
+    knowledge: List[str]
+    skills: List[str]
+    related_topics: List[str] = Field(default_factory=list)
 
 class Module(BaseModel):
     title: str = Field(..., min_length=3)
@@ -25,17 +25,12 @@ class Framework(BaseModel):
     total_hours: int = Field(..., ge=16, le=500)
     final_assessment_hours: int = Field(default=2, ge=0)
 
-# ==========================================
-# [ФИКС РЕВЬЮЕРА]: Строгие схемы для контента
-# ==========================================
-
 class TestQuestion(BaseModel):
     question: str
     options: List[str]
     correct_answer: str
     related_competency: str
-    # Добавляем категорию для LMS
-    category: str = Field(default="Общая", description="Категория вопроса для LMS")
+    category: str = Field(default="Общая")
 
 class SeminarTask(BaseModel):
     module_title: str
@@ -57,7 +52,6 @@ class WorkProgram(BaseModel):
     module_title: str
     description: str
 
-# Единая схема для всего сгенерированного контента
 class ContentPack(BaseModel):
     tests: List[TestQuestion] = Field(default_factory=list)
     seminars: List[SeminarTask] = Field(default_factory=list)
@@ -67,16 +61,17 @@ class ContentPack(BaseModel):
     bibliography: List[str] = Field(default_factory=list)
 
 class SubTask(BaseModel):
-    target_key: str = Field(..., description="Ключ, куда сохранить результат")
-    prompt: str = Field(..., description="Готовый промпт для отправки в LLM")
-    expected_format: str = Field(default="json_array", description="Ожидаемый формат ответа")
+    target_key: str
+    prompt: str
+    expected_format: str = "json_array"
 
 class ExecutionPlan(BaseModel):
-    reasoning: str = Field(..., description="Обоснование")
-    tasks: List[SubTask] = Field(..., description="Список задач")
+    reasoning: str
+    tasks: List[SubTask]
 
 class GenerateRequest(BaseModel):
-    topic: str = Field(..., min_length=3, max_length=100)
+    # [ФИКС]: Разрешаем темы от 2 символов (ML, AI, Go, C#)
+    topic: str = Field(..., min_length=2, max_length=100)
     hours: Optional[int] = Field(default=None, ge=16, le=500)
     template_type: Optional[Literal["ДПО", "Общеразвивающая", "auto"]] = Field(default="auto")
     reference_text: Optional[str] = Field(default=None, max_length=15000)
