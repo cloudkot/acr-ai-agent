@@ -87,10 +87,27 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
         total_cost += cost
         
         if data is not None:
+            # [ФИКС БИБЛИОГРАФИИ]: Если LLM вернула объект вместо массива строк
+            if key == "bibliography":
+                if isinstance(data, dict) and "resources" in data:
+                    parsed_books = []
+                    for item in data["resources"]:
+                        if isinstance(item, dict):
+                            author = item.get("author", "")
+                            title = item.get("title", "")
+                            year = item.get("year", "")
+                            parsed_books.append(f"{author}. {title}. {year} г.")
+                        elif isinstance(item, str):
+                            parsed_books.append(item)
+                    final_content[key].extend(parsed_books)
+                elif isinstance(data, list):
+                    final_content[key].extend([str(x) for x in data if isinstance(x, str)])
+                continue
+
+            # Обычная обработка для остальных ключей
             if isinstance(data, dict): 
                 data = [data]
             if isinstance(data, list):
-                # [ФИКС]: Применяем жесткую валидацию формата из content.py
                 if key == "tests":
                     final_content[key].extend(validate_test_format(data))
                 elif key == "seminars":
@@ -99,9 +116,7 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                     valid_items = [x for x in data if x and x != "None"]
                     final_content[key].extend(valid_items)
 
-    # ==========================================
-    # [ФИКС РЕВЬЮЕРА]: Умная склейка и сборка Rule-based fallback
-    # ==========================================
+
     logger.info("Проверка полноты сгенерированного контента...")
     
     # 1. Тесты
