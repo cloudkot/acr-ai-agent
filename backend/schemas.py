@@ -25,24 +25,55 @@ class Framework(BaseModel):
     total_hours: int = Field(..., ge=16, le=500)
     final_assessment_hours: int = Field(default=2, ge=0)
 
-# [НОВАЯ СХЕМА]: Заставляем ИИ генерировать структурированные слайды
+# ==========================================
+# [ФИКС РЕВЬЮЕРА]: Строгие схемы для контента
+# ==========================================
+
+class TestQuestion(BaseModel):
+    question: str
+    options: List[str]
+    correct_answer: str
+    related_competency: str
+    # Добавляем категорию для LMS
+    category: str = Field(default="Общая", description="Категория вопроса для LMS")
+
+class SeminarTask(BaseModel):
+    module_title: str
+    task: str
+    criteria: str
+    related_competency: str
+
+class LecturePlan(BaseModel):
+    module_title: str
+    theses: List[str]
+
 class Slide(BaseModel):
-    slide_type: Literal["title", "content", "two_columns", "summary"] = Field(
-        default="content", 
-        description="Тип слайда. title - титульный, content - обычный список, two_columns - два столбца, summary - итоги"
-    )
-    title: str = Field(..., description="Заголовок слайда")
-    bullets: List[str] = Field(default_factory=list, description="Тезисы для слайда (не более 5)")
-    speaker_notes: str = Field(default="", description="Текст для озвучивания лектором (то, что не видно на экране)")
+    slide_type: Literal["title", "content", "two_columns", "summary"] = "content"
+    title: str
+    bullets: List[str] = Field(default_factory=list)
+    speaker_notes: str = Field(default="")
+
+class WorkProgram(BaseModel):
+    module_title: str
+    description: str
+
+# Единая схема для всего сгенерированного контента
+class ContentPack(BaseModel):
+    tests: List[TestQuestion] = Field(default_factory=list)
+    seminars: List[SeminarTask] = Field(default_factory=list)
+    lectures: List[LecturePlan] = Field(default_factory=list)
+    slides: List[Slide] = Field(default_factory=list)
+    work_programs: List[WorkProgram] = Field(default_factory=list)
+    bibliography: List[str] = Field(default_factory=list)
 
 class SubTask(BaseModel):
-    target_key: str = Field(..., description="Ключ, куда сохранить результат (например, 'tests', 'seminars', 'lectures', 'slides')")
+    target_key: str = Field(..., description="Ключ, куда сохранить результат")
     prompt: str = Field(..., description="Готовый промпт для отправки в LLM")
-    expected_format: str = Field(default="json_array", description="Ожидаемый формат ответа (json_array или json_object)")
+    expected_format: str = Field(default="json_array", description="Ожидаемый формат ответа")
 
 class ExecutionPlan(BaseModel):
-    reasoning: str = Field(..., description="Обоснование того, как разбить задачи")
-    tasks: List[SubTask] = Field(..., description="Список задач для параллельного выполнения")
+    reasoning: str = Field(..., description="Обоснование")
+    tasks: List[SubTask] = Field(..., description="Список задач")
 
 class GenerateRequest(BaseModel):
     topic: str = Field(..., min_length=3, max_length=100)

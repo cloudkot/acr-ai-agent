@@ -53,15 +53,13 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
 
     # --- 3. Карта компетенций ---
     doc.add_heading('2. Планируемые результаты обучения (Карта компетенций)', level=1)
-    
     table_comp = doc.add_table(rows=1, cols=3)
     table_comp.style = 'Table Grid'
     hdr = table_comp.rows[0].cells
     hdr[0].text = "Компетенция"
     hdr[1].text = "Знания (что должен знать)"
     hdr[2].text = "Умения и навыки (что должен уметь)"
-    for cell in hdr:
-        cell.paragraphs[0].runs[0].bold = True
+    for cell in hdr: cell.paragraphs[0].runs[0].bold = True
 
     for comp in framework.competencies:
         row = table_comp.add_row().cells
@@ -71,7 +69,6 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
 
     # --- 4. Учебный план ---
     doc.add_heading('3. Учебный план', level=1)
-    
     table_plan = doc.add_table(rows=1, cols=7)
     table_plan.style = 'Table Grid'
     hdr_plan = table_plan.rows[0].cells
@@ -154,12 +151,10 @@ def _export_to_docx_sync(framework: Framework, content: dict, filename: str, con
 def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, constraints_check: dict = None):
     prs = Presentation()
     
-    # 1. Титульный слайд
     slide = prs.slides.add_slide(prs.slide_layouts[0])
     slide.shapes.title.text = f"Программа: {framework.goal[:50]}..."
     slide.placeholders[1].text = f"Объем: {framework.total_hours} ч.\nТип: {framework.template_type}"
     
-    # 2. Слайд с предупреждениями (если есть)
     if constraints_check and not constraints_check.get("constraints_ok", True):
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         slide.shapes.title.text = "Внимание: Отклонения от ТЗ"
@@ -170,17 +165,12 @@ def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, con
             p.text = err
             p.level = 1
 
-    # 3. Слайды из контента (используем новые типы слайдов)
     slides_data = content.get("slides", [])
-    
-    # Если слайдов нет, делаем fallback из лекций
     if not slides_data and content.get("lectures"):
         for lec in content["lectures"]:
             slides_data.append({
-                "slide_type": "content",
-                "title": lec.get("module_title", "Лекция"),
-                "bullets": lec.get("theses", []),
-                "speaker_notes": "Описание лекции отсутствует."
+                "slide_type": "content", "title": lec.get("module_title", "Лекция"),
+                "bullets": lec.get("theses", []), "speaker_notes": ""
             })
 
     for slide_info in slides_data:
@@ -189,16 +179,13 @@ def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, con
         bullets = slide_info.get("bullets", [])
         notes_text = slide_info.get("speaker_notes", "")
 
-        # Выбор макета
         if slide_type == "title":
             slide = prs.slides.add_slide(prs.slide_layouts[0])
             slide.shapes.title.text = title_text
-            if bullets:
-                slide.placeholders[1].text = bullets[0]
+            if bullets: slide.placeholders[1].text = bullets[0]
         elif slide_type == "two_columns" and len(bullets) >= 2:
-            slide = prs.slides.add_slide(prs.slide_layouts[3]) # Two Content
+            slide = prs.slides.add_slide(prs.slide_layouts[3])
             slide.shapes.title.text = title_text
-            # Заполняем две колонки
             tf_left = slide.placeholders[1].text_frame
             tf_right = slide.placeholders[2].text_frame
             mid = len(bullets) // 2
@@ -207,7 +194,6 @@ def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, con
             tf_right.text = bullets[mid]
             for b in bullets[mid+1:]: tf_right.add_paragraph(b)
         else:
-            # Обычный слайд (Title and Content)
             slide = prs.slides.add_slide(prs.slide_layouts[1])
             slide.shapes.title.text = title_text
             tf = slide.placeholders[1].text_frame
@@ -218,7 +204,6 @@ def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, con
                     p.text = bullet
                     p.level = 1
                     
-        # Добавление заметок для лектора
         if notes_text:
             slide.notes_slide.notes_text_frame.text = notes_text
 
@@ -226,33 +211,59 @@ def _export_to_pptx_sync(framework: Framework, content: dict, filename: str, con
     return filename
 
 def _export_tests_to_lms_sync(tests_data: list, filename: str):
+    """[ФИКС РЕВЬЮЕРА]: Экспорт в GIFT с поддержкой категорий."""
     with open(filename, 'w', encoding='utf-8') as f:
-        for i, test in enumerate(tests_data, 1):
-            question = test.get('question', f'Вопрос {i}')
-            options = test.get('options', [])
-            correct = test.get('correct_answer', '')
-            f.write(f"::Вопрос {i}::{question} {{\n")
-            for opt in options:
-                if opt == correct: f.write(f"  ={opt}\n")
-                else: f.write(f"  ~{opt}\n")
-            f.write("}\n\n")
+        # Группируем по категориям
+        categories = {}
+        for test in tests_data:
+            cat = test.get('category', 'Общая')
+            if cat not in categories: categories[cat] = []
+            categories[cat].append(test)
+            
+        for cat, tests in categories.items():
+            f.write(f"$CATEGORY: {cat}\n\n")
+            for i, test in enumerate(tests, 1):
+                question = test.get('question', f'Вопрос {i}')
+                options = test.get('options', [])
+                correct = test.get('correct_answer', '')
+                f.write(f"::Вопрос {i}::{question} {{\n")
+                for opt in options:
+                    if opt == correct: f.write(f"  ={opt}\n")
+                    else: f.write(f"  ~{opt}\n")
+                f.write("}\n\n")
     return filename
 
 def _export_tests_to_moodle_xml_sync(tests_data: list, filename: str):
+    """[ФИКС РЕВЬЮЕРА]: Экспорт в Moodle XML с поддержкой категорий."""
     quiz = ET.Element("quiz")
-    for i, test in enumerate(tests_data, 1):
-        question = ET.SubElement(quiz, "question", type="multichoice")
-        name = ET.SubElement(question, "name")
-        ET.SubElement(name, "text").text = f"Вопрос {i}"
+    
+    # Группируем по категориям
+    categories = {}
+    for test in tests_data:
+        cat = test.get('category', 'Общая')
+        if cat not in categories: categories[cat] = []
+        categories[cat].append(test)
         
-        q_text = ET.SubElement(question, "questiontext", format="html")
-        ET.SubElement(q_text, "text").text = f"<p>{test.get('question', '')}</p>"
+    for cat, tests in categories.items():
+        # Определение категории
+        cat_q = ET.SubElement(quiz, "question", type="category")
+        cat_node = ET.SubElement(cat_q, "category")
+        cat_text = ET.SubElement(cat_node, "text")
+        cat_text.text = cat
         
-        for opt in test.get('options', []):
-            fraction = "100" if opt == test.get('correct_answer') else "0"
-            answer = ET.SubElement(question, "answer", fraction=fraction, format="html")
-            ET.SubElement(answer, "text").text = f"<p>{opt}</p>"
+        for i, test in enumerate(tests, 1):
+            question = ET.SubElement(quiz, "question", type="multichoice")
+            name = ET.SubElement(question, "name")
+            ET.SubElement(name, "text").text = f"Вопрос {i}"
             
+            q_text = ET.SubElement(question, "questiontext", format="html")
+            ET.SubElement(q_text, "text").text = f"<p>{test.get('question', '')}</p>"
+            
+            for opt in test.get('options', []):
+                fraction = "100" if opt == test.get('correct_answer') else "0"
+                answer = ET.SubElement(question, "answer", fraction=fraction, format="html")
+                ET.SubElement(answer, "text").text = f"<p>{opt}</p>"
+                
     tree = ET.ElementTree(quiz)
     ET.indent(tree, space="  ")
     tree.write(filename, encoding="utf-8", xml_declaration=True)

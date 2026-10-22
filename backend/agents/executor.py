@@ -1,7 +1,7 @@
 import json
 import asyncio
 from cloud import ask_llm, MODEL_FAST
-from schemas import ExecutionPlan, Framework
+from schemas import ExecutionPlan, Framework, ContentPack
 from utils.json_parser import extract_json_from_text
 from agents.content import (
     _rule_based_fallback_test, 
@@ -35,7 +35,6 @@ async def _execute_single_task(task, retries: int = 3) -> tuple[str, any, int, f
             except Exception as e:
                 logger.warning(f"Ошибка задачи [{task.target_key}] ({attempt+1}/{retries}): {e}")
                 if attempt == retries - 1:
-                    # Уровень 1: LLM-Fallback (упрощенный запрос)
                     logger.info(f"Запуск LLM-fallback для [{task.target_key}]...")
                     try:
                         fb_prompt = f"Сгенерируй данные для '{task.target_key}' в формате JSON. Контекст: {task.prompt[:200]}"
@@ -48,35 +47,27 @@ async def _execute_single_task(task, retries: int = 3) -> tuple[str, any, int, f
                     except Exception as e_fb:
                         logger.error(f"LLM-fallback тоже упал для [{task.target_key}]: {e_fb}")
                     
-                    # Возвращаем пустоту, чтобы включился rule-based fallback
                     return task.target_key, None, total_tokens, total_cost
                 await asyncio.sleep(2)
 
 async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict, int, float]:
     """
     [АРХИТЕКТУРА]: Исполнитель плана.
-    Берет массив задач от LLM-планировщика, выполняет их параллельно и склеивает результаты.
+    Выполняет задачи параллельно, валидирует через Pydantic-схему ContentPack.
     """
     logger.info(f"Запуск Исполнителя. В плане {len(plan.tasks)} задач.")
     
-    # Инициализируем контейнеры для результатов
     final_content = {
-        "tests": [], 
-        "lectures": [], 
-        "seminars": [], 
-        "slides": [], 
-        "work_programs": [], 
-        "bibliography": []
+        "tests": [], "lectures": [], "seminars": [], 
+        "slides": [], "work_programs": [], "bibliography": []
     }
     
     total_tokens = 0
     total_cost = 0.0
     
-    # Создаем задачи для asyncio.gather
     tasks = [_execute_single_task(task) for task in plan.tasks]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    # Собираем результаты
     for res in results:
         if isinstance(res, Exception):
             logger.error(f"Критический сбой задачи: {res}")
@@ -87,24 +78,21 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
         total_cost += cost
         
         if data is not None:
-            # [ФИКС БИБЛИОГРАФИИ]: Если LLM вернула объект вместо массива строк
+            # [ФИКС БИБЛИОГРАФИИ]
             if key == "bibliography":
                 if isinstance(data, dict) and "resources" in data:
-                    parsed_books = []
                     for item in data["resources"]:
                         if isinstance(item, dict):
                             author = item.get("author", "")
                             title = item.get("title", "")
                             year = item.get("year", "")
-                            parsed_books.append(f"{author}. {title}. {year} г.")
+                            final_content[key].append(f"{author}. {title}. {year} г.")
                         elif isinstance(item, str):
-                            parsed_books.append(item)
-                    final_content[key].extend(parsed_books)
+                            final_content[key].append(item)
                 elif isinstance(data, list):
                     final_content[key].extend([str(x) for x in data if isinstance(x, str)])
                 continue
 
-            # Обычная обработка для остальных ключей
             if isinstance(data, dict): 
                 data = [data]
             if isinstance(data, list):
@@ -116,17 +104,27 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                     valid_items = [x for x in data if x and x != "None"]
                     final_content[key].extend(valid_items)
 
-
+    # ==========================================
+    # [ФИКС РЕВЬЮЕРА]: Умная склейка и Rule-based fallback
+    # ==========================================
     logger.info("Проверка полноты сгенерированного контента...")
     
     # 1. Тесты
     target_q = max(config.MIN_QUESTIONS, framework.total_hours // config.QUESTIONS_PER_HOURS)
     final_content["tests"] = final_content["tests"][:target_q]
+    
+    # Добавляем категории к тестам для LMS
+    for t in final_content["tests"]:
+        if "category" not in t or not t["category"]:
+            t["category"] = t.get("related_competency", "Общая")
+
     while len(final_content["tests"]) < target_q:
         mod_title = framework.modules[len(final_content["tests"]) % len(framework.modules)].title if framework.modules else "программе"
-        final_content["tests"].append(_rule_based_fallback_test(framework, len(final_content["tests"]) + 1, mod_title))
+        fallback_test = _rule_based_fallback_test(framework, len(final_content["tests"]) + 1, mod_title)
+        fallback_test["category"] = mod_title  # Добавляем категорию для fallback-теста
+        final_content["tests"].append(fallback_test)
 
-    # 2. Лекции и Семинары (проверяем, что есть для каждого модуля)
+    # 2. Лекции и Семинары
     for mod in framework.modules:
         if not any(mod.title.lower() in str(l.get("module_title", "")).lower() for l in final_content["lectures"]):
             final_content["lectures"].append(_rule_based_fallback_lecture(framework, mod.title))
@@ -146,5 +144,14 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                 "description": f"Рабочая программа по модулю '{mod.title}' (сгенерирована автоматически)."
             })
 
+    try:
+        # Прогоняем через Pydantic-схему, чтобы гарантировать контракт
+        validated_pack = ContentPack(**final_content)
+        final_dict = validated_pack.model_dump()
+        logger.info("Валидация ContentPack прошла успешно.")
+    except Exception as e:
+        logger.error(f"Ошибка валидации ContentPack: {e}. Возвращаем как есть.")
+        final_dict = final_content
+
     logger.info(f"Сборка завершена. Потрачено токенов: {total_tokens}, Стоимость: {total_cost:.4f} руб.")
-    return final_content, total_tokens, total_cost
+    return final_dict, total_tokens, total_cost
