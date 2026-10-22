@@ -1,8 +1,7 @@
 import os
 import asyncio
 from urllib.parse import urlparse
-from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, BadRequestError
-from typing import Optional, Dict, Any
+from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, RateLimitError
 
 # [ТРЕБОВАНИЕ КЕЙСА]: Жесткая фиксация провайдера (только Cloud.ru)
 ALLOWED_DOMAINS = ["gigaschool.ru", "cloud.ru", "sber.ru"]
@@ -14,7 +13,6 @@ if not any(domain in parsed_url.netloc for domain in ALLOWED_DOMAINS):
 
 api_key = os.getenv("OPENAI_API_KEY", "")
 
-# [АРХИТЕКТУРА]: AsyncOpenAI для неблокирующих запросов
 client = AsyncOpenAI(api_key=api_key or "dummy", base_url=base_url, timeout=120.0)
 
 MODEL_FAST = "GigaChat/GigaChat-3-Pro"
@@ -34,46 +32,32 @@ class LLMServiceError(Exception):
 class LLMRouter:
     @staticmethod
     def get_model_for_task(task_type: str) -> str:
-        if task_type in ["framework", "validation", "revision", "slides"]:
+        if task_type in ["framework", "validation", "revision"]:
             return MODEL_REASONING
         return MODEL_FAST
 
 async def ask_llm(
     prompt: str, 
     task_type: str = "content", 
-    is_json: bool = False,
-    json_schema: Optional[Dict[str, Any]] = None,
-    schema_name: str = "default_schema"
+    is_json: bool = False
 ) -> tuple[str, int, float]:
     """
     [ТРЕБОВАНИЕ КЕЙСА]: Асинхронный вызов LLM.
-    [УЛУЧШЕНИЕ]: Поддерживает нативную передачу JSON-схемы (Structured Output).
-    Если шлюз не поддерживает схемы, автоматически откатывается на json_object.
+    [ФИКС]: Убрали сложный json_schema, оставили базовый json_object.
+    Добавили экспоненциальную задержку при Rate Limit (429).
     """
     model = LLMRouter.get_model_for_task(task_type)
     
     kwargs = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 10000
+        "max_tokens": 8000
     }
     
-    # [ФИКС]: Изначально пытаемся использовать строгую схему
-    if json_schema:
-        kwargs["response_format"] = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": schema_name,
-                "schema": json_schema,
-                "strict": True
-            }
-        }
-    elif is_json:
+    if is_json:
         kwargs["response_format"] = {"type": "json_object"}
 
-    schema_fallback_triggered = False
-
-    for attempt in range(3):
+    for attempt in range(4): # 4 попытки
         try:
             response = await client.chat.completions.create(**kwargs)
             content = response.choices[0].message.content
@@ -91,20 +75,17 @@ async def ask_llm(
             
             return content, usage.total_tokens, total_cost
             
-        except BadRequestError as e:
-            # [ФИКС]: Шлюз не поддерживает json_schema (ошибка 400). Переключаемся на обычный JSON.
-            if json_schema and not schema_fallback_triggered:
-                print(f"[WARNING] Шлюз отклонил json_schema. Переключение на json_object...")
-                kwargs["response_format"] = {"type": "json_object"}
-                schema_fallback_triggered = True
-                continue # Повторяем попытку без увеличения счетчика
-            if attempt == 2: raise LLMServiceError(f"Ошибка запроса к LLM: {str(e)}", status_code=500)
-            await asyncio.sleep(2)
+        except RateLimitError as e:
+            # [ФИКС]: Если сработал Rate Limit (превышение запросов в минуту)
+            wait_time = (attempt + 1) * 5
+            print(f"[WARNING] Rate Limit! Ждем {wait_time} секунд...")
+            if attempt == 3: raise LLMServiceError(f"Rate Limit: {str(e)}", status_code=429)
+            await asyncio.sleep(wait_time)
             
         except (APITimeoutError, APIConnectionError) as e:
-            if attempt == 2: raise LLMServiceError(f"Таймаут LLM: {str(e)}", status_code=504)
+            if attempt == 3: raise LLMServiceError(f"Таймаут LLM: {str(e)}", status_code=504)
             await asyncio.sleep(3)
             
         except Exception as e:
-            if attempt == 2: raise LLMServiceError(f"Ошибка LLM: {str(e)}", status_code=500)
+            if attempt == 3: raise LLMServiceError(f"Ошибка LLM: {str(e)}", status_code=500)
             await asyncio.sleep(2)

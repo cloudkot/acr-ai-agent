@@ -5,9 +5,9 @@ class Config:
     [АРХИТЕКТУРА]: Централизованная конфигурация.
     Позволяет менять параметры генерации без изменения кода.
     """
-    # Максимальное количество одновременных HTTP-запросов к GigaChat.
-    # Если ВМ начинает падать по памяти (OOM), уменьшите до 3.
-    MAX_CONCURRENT_REQUESTS = int(os.getenv("LLM_MAX_CONCURRENT", 4))
+    # [ФИКС RATE LIMIT]: Снижаем до 1, чтобы шлюз GigaChat не блокировал запросы.
+    # Генерация будет идти последовательно, но стабильно.
+    MAX_CONCURRENT_REQUESTS = int(os.getenv("LLM_MAX_CONCURRENT", 1))
     
     # Количество вопросов: 1 вопрос на каждые N часов, но не менее MIN_QUESTIONS.
     QUESTIONS_PER_HOURS = int(os.getenv("QUESTIONS_PER_HOURS", 15))
