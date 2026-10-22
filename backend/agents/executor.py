@@ -1,10 +1,7 @@
 import json
 import asyncio
 from cloud import ask_llm, MODEL_FAST
-from schemas import (
-    ExecutionPlan, Framework, ContentPack,
-    TestQuestion, SeminarTask, LecturePlan, Slide, WorkProgram
-)
+from schemas import ExecutionPlan, Framework, ContentPack
 from utils.json_parser import extract_json_from_text
 from agents.content import (
     _rule_based_fallback_test, 
@@ -20,74 +17,29 @@ from logger import logger
 MAX_CONCURRENT_REQUESTS = config.MAX_CONCURRENT_REQUESTS
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-# [УЛУЧШЕНИЕ]: Генерируем строгие JSON-схемы из Pydantic-моделей
-SCHEMAS = {
-    "tests": {"type": "array", "items": TestQuestion.model_json_schema()},
-    "lectures": {"type": "array", "items": LecturePlan.model_json_schema()},
-    "seminars": {"type": "array", "items": SeminarTask.model_json_schema()},
-    "slides": {"type": "array", "items": Slide.model_json_schema()},
-    "work_programs": {"type": "array", "items": WorkProgram.model_json_schema()},
-    "bibliography": {"type": "array", "items": {"type": "string"}}
-}
-
 def _extract_list_from_response(data: any) -> list:
-    """[УТИЛИТА]: Извлекает массив из ответа LLM, если он обернут в объект."""
+    """[УТИЛИТА]: Извлекает массив из ответа LLM (даже если это батч из нескольких модулей)."""
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for key in ["items", "data", "results", "questions", "tasks", "content", "slides"]:
+        for key in ["items", "data", "results", "questions", "tasks", "content", "slides", "lectures", "seminars"]:
             if key in data and isinstance(data[key], list):
                 return data[key]
         return [data]
     return []
 
-async def _execute_single_task(task, retries: int = 3) -> tuple[str, any, int, float]:
-    """[АРХИТЕКТУРА]: Выполняет одну задачу с использованием Strict JSON Schema."""
-    total_tokens = 0
-    total_cost = 0.0
-    
-    # Получаем схему для конкретного типа контента
-    schema = SCHEMAS.get(task.target_key)
-    schema_name = f"{task.target_key}_schema"
-
+async def _execute_single_task(task) -> tuple[str, any, int, float, bool]:
+    """[АРХИТЕКТУРА]: Одна попытка выполнить задачу."""
     async with semaphore:
-        for attempt in range(retries):
-            try:
-                # [ФИКС]: Передаем схему в ask_llm для нативного Structured Output
-                raw, tokens, cost = await ask_llm(
-                    task.prompt, 
-                    task_type="content", 
-                    is_json=True,
-                    json_schema=schema,
-                    schema_name=schema_name
-                )
-                total_tokens += tokens
-                total_cost += cost
-                
-                data = extract_json_from_text(raw)
-                return task.target_key, data, total_tokens, total_cost
-                
-            except Exception as e:
-                logger.warning(f"Ошибка задачи [{task.target_key}] ({attempt+1}/{retries}): {e}")
-                if attempt == retries - 1:
-                    logger.info(f"Запуск LLM-fallback для [{task.target_key}]...")
-                    try:
-                        # Фоллбэк без строгой схемы (просто просим JSON)
-                        fb_prompt = f"Сгенерируй данные для '{task.target_key}' в формате JSON. Контекст: {task.prompt[:200]}"
-                        raw_fb, t_fb, c_fb = await ask_llm(fb_prompt, MODEL_FAST, True)
-                        total_tokens += t_fb
-                        total_cost += c_fb
-                        data_fb = extract_json_from_text(raw_fb)
-                        if data_fb:
-                            return task.target_key, data_fb, total_tokens, total_cost
-                    except Exception as e_fb:
-                        logger.error(f"LLM-fallback тоже упал для [{task.target_key}]: {e_fb}")
-                    
-                    return task.target_key, None, total_tokens, total_cost
-                await asyncio.sleep(2)
+        try:
+            raw, tokens, cost = await ask_llm(task.prompt, task_type="content", is_json=True)
+            data = extract_json_from_text(raw)
+            return task.target_key, data, tokens, cost, True
+        except Exception as e:
+            logger.warning(f"Сбой задачи [{task.target_key}]: {e}")
+            return task.target_key, None, 0, 0.0, False
 
 def _rule_based_fallback_slide(framework: Framework, mod_title: str) -> dict:
-    """[ФИКС]: Заглушка для слайда, если LLM не справилась."""
     return {
         "slide_type": "content",
         "title": f"Ошибка генерации: {mod_title}",
@@ -97,8 +49,7 @@ def _rule_based_fallback_slide(framework: Framework, mod_title: str) -> dict:
 
 async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict, int, float]:
     """
-    [АРХИТЕКТУРА]: Исполнитель плана.
-    Выполняет задачи параллельно, валидирует и собирает контент.
+    [АРХИТЕКТУРА]: Исполнитель плана с очередью повторных попыток.
     """
     logger.info(f"Запуск Исполнителя. В плане {len(plan.tasks)} задач.")
     
@@ -111,20 +62,31 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
     total_cost = 0.0
     generation_errors = 0
     
-    tasks = [_execute_single_task(task) for task in plan.tasks]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    pending_tasks = list(plan.tasks)
+    max_rounds = 3
     
-    for res in results:
-        if isinstance(res, Exception):
-            logger.error(f"Критический сбой задачи: {res}")
-            generation_errors += 1
-            continue
+    for round_num in range(max_rounds):
+        if not pending_tasks:
+            break
             
-        key, data, tokens, cost = res
-        total_tokens += tokens
-        total_cost += cost
+        logger.info(f"Раунд выполнения {round_num + 1}. Осталось задач: {len(pending_tasks)}")
         
-        if data is not None:
+        tasks = [_execute_single_task(task) for task in pending_tasks]
+        results = await asyncio.gather(*tasks)
+        
+        next_pending = []
+        
+        for res in results:
+            key, data, tokens, cost, is_success = res
+            total_tokens += tokens
+            total_cost += cost
+            
+            if not is_success or data is None:
+                failed_task = next(t for t in pending_tasks if t.target_key == key)
+                next_pending.append(failed_task)
+                continue
+                
+            # Обработка библиографии (там могут быть объекты)
             if key == "bibliography":
                 if isinstance(data, dict) and "resources" in data:
                     for item in data["resources"]:
@@ -137,17 +99,25 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
                     final_content[key].extend([str(x) for x in items if isinstance(x, str)])
                 continue
 
+            # Обработка остального контента (батчи лекций, семинаров)
             items = _extract_list_from_response(data)
-            
             if key == "tests":
                 final_content[key].extend(validate_test_format(items))
             elif key == "seminars":
                 final_content[key].extend(validate_seminar_format(items))
             else:
+                # Для лекций, слайдов и рабочих программ
                 valid_items = [x for x in items if isinstance(x, dict) and x]
                 final_content[key].extend(valid_items)
-        else:
-            generation_errors += 1
+
+        pending_tasks = next_pending
+        if pending_tasks:
+            logger.warning(f"Пауза 5 секунд перед повторной попыткой {len(pending_tasks)} задач...")
+            await asyncio.sleep(5)
+
+    if pending_tasks:
+        logger.error(f"После {max_rounds} раундов осталось {len(pending_tasks)} сбойных задач.")
+        generation_errors += len(pending_tasks)
 
     logger.info("Проверка полноты сгенерированного контента...")
     
@@ -187,21 +157,18 @@ async def execute_plan(plan: ExecutionPlan, framework: Framework) -> tuple[dict,
             })
             generation_errors += 1
 
-    # 3. Библиография
     if not final_content["bibliography"]:
         final_content["bibliography"] = _rule_based_fallback_bibliography(framework)
         generation_errors += 1
 
     if generation_errors > 0:
-        logger.warning(f"Завершено с ошибками генерации. Количество сбойных элементов: {generation_errors}")
+        logger.warning(f"Завершено с ошибками. Сбойных элементов: {generation_errors}")
 
     try:
         validated_pack = ContentPack(**final_content)
         final_dict = validated_pack.model_dump()
-        logger.info("Валидация ContentPack прошла успешно.")
     except Exception as e:
-        logger.error(f"Ошибка валидации ContentPack: {e}. Возвращаем очищенный словарь.")
+        logger.error(f"Ошибка валидации ContentPack: {e}")
         final_dict = final_content
 
-    logger.info(f"Сборка завершена. Потрачено токенов: {total_tokens}, Стоимость: {total_cost:.4f} руб.")
     return final_dict, total_tokens, total_cost
