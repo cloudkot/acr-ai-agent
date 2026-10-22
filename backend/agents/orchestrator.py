@@ -4,23 +4,14 @@ from typing import Dict, Any, List
 from cloud import ask_llm
 from agents.base import BaseAgent
 from agents.curriculum import generate_framework_json, revise_framework_json
-from agents.content import (
-    generate_tests, 
-    generate_lectures, 
-    generate_seminars, 
-    generate_slides, 
-    generate_work_programs, 
-    generate_bibliography
-)
+from agents.planner import create_execution_plan
+from agents.executor import execute_plan
 from agents.validator_skill import ValidationSkill
 from state_store import save_session, get_session, log_action
 from utils.json_parser import extract_json_from_text
 from logger import logger
 
-# ==========================================
 # [АРХИТЕКТУРА GIGACOWORK]: Изолированные Навыки
-# ==========================================
-
 class CurriculumSkill(BaseAgent):
     def __init__(self):
         super().__init__("Curriculum Architect", "Генерирует каркас программы.")
@@ -34,62 +25,22 @@ class CurriculumSkill(BaseAgent):
         context["cost"] = context.get("cost", 0.0) + cost
         return context
 
-class TestsSkill(BaseAgent):
+class PlannerSkill(BaseAgent):
     def __init__(self):
-        super().__init__("Tests Generator", "Генерирует тестовые вопросы.")
+        super().__init__("LLM Planner", "Анализирует каркас и генерирует план из подзадач.")
     async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        res, tokens, cost = await generate_tests(context["framework"], context.get("constraints"))
-        context["tests"] = res
+        plan, tokens, cost = await create_execution_plan(context["framework"], context.get("constraints"))
+        context["plan"] = plan
         context["tokens"] = context.get("tokens", 0) + tokens
         context["cost"] = context.get("cost", 0.0) + cost
         return context
 
-class LecturesSkill(BaseAgent):
+class ExecutorSkill(BaseAgent):
     def __init__(self):
-        super().__init__("Lectures Generator", "Генерирует планы лекций.")
+        super().__init__("LLM Executor", "Выполняет план задач параллельно.")
     async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        res, tokens, cost = await generate_lectures(context["framework"], context.get("constraints"))
-        context["lectures"] = res
-        context["tokens"] = context.get("tokens", 0) + tokens
-        context["cost"] = context.get("cost", 0.0) + cost
-        return context
-
-class SeminarsSkill(BaseAgent):
-    def __init__(self):
-        super().__init__("Seminars Generator", "Генерирует задания для семинаров.")
-    async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        res, tokens, cost = await generate_seminars(context["framework"], context.get("constraints"))
-        context["seminars"] = res
-        context["tokens"] = context.get("tokens", 0) + tokens
-        context["cost"] = context.get("cost", 0.0) + cost
-        return context
-
-class SlidesSkill(BaseAgent):
-    def __init__(self):
-        super().__init__("Slides Generator", "Генерирует структуру слайдов.")
-    async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        res, tokens, cost = await generate_slides(context["framework"], context.get("constraints"))
-        context["slides"] = res
-        context["tokens"] = context.get("tokens", 0) + tokens
-        context["cost"] = context.get("cost", 0.0) + cost
-        return context
-
-class WorkProgramsSkill(BaseAgent):
-    def __init__(self):
-        super().__init__("Work Programs Generator", "Генерирует рабочие программы.")
-    async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        res, tokens, cost = await generate_work_programs(context["framework"], context.get("constraints"))
-        context["work_programs"] = res
-        context["tokens"] = context.get("tokens", 0) + tokens
-        context["cost"] = context.get("cost", 0.0) + cost
-        return context
-
-class BibliographySkill(BaseAgent):
-    def __init__(self):
-        super().__init__("Bibliography Generator", "Генерирует список литературы.")
-    async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        res, tokens, cost = await generate_bibliography(context["framework"], context.get("constraints"))
-        context["bibliography"] = res
+        content, tokens, cost = await execute_plan(context["plan"], context["framework"])
+        context["content"] = content
         context["tokens"] = context.get("tokens", 0) + tokens
         context["cost"] = context.get("cost", 0.0) + cost
         return context
@@ -104,36 +55,26 @@ class RevisionSkill(BaseAgent):
         context["cost"] = context.get("cost", 0.0) + cost
         return context
 
-# ==========================================
-# [ФИКС РЕВЬЮЕРА]: Динамический Оркестратор
-# ==========================================
-
+# [АРХИТЕКТУРА]: Динамический Оркестратор
 class AgentOrchestrator:
     """
-    Центральный диспетчер с динамическим реестром навыков.
-    Позволяет добавлять новые навыки без изменения кода оркестратора.
+    Центральный диспетчер с реестром навыков.
     """
     def __init__(self):
         self.skills: Dict[str, BaseAgent] = {}
         
-        # [ФИКС]: Динамическая регистрация базовых навыков
+        # Регистрация навыков
         self.register_skill("curriculum", CurriculumSkill())
-        self.register_skill("tests", TestsSkill())
-        self.register_skill("lectures", LecturesSkill())
-        self.register_skill("seminars", SeminarsSkill())
-        self.register_skill("slides", SlidesSkill())
-        self.register_skill("work_programs", WorkProgramsSkill())
-        self.register_skill("bibliography", BibliographySkill())
+        self.register_skill("planner", PlannerSkill())
+        self.register_skill("executor", ExecutorSkill())
         self.register_skill("revision", RevisionSkill())
         self.register_skill("validation", ValidationSkill())
 
     def register_skill(self, name: str, skill: BaseAgent):
-        """[ФИКС РЕВЬЮЕРА]: Метод для динамического добавления нового навыка."""
         logger.info(f"Регистрация навыка: {name} ({skill.name})")
         self.skills[name] = skill
 
     async def run_steps(self, step_names: List[str], context: Dict[str, Any], parallel: bool = False) -> Dict[str, Any]:
-        """[АРХИТЕКТУРА]: Динамический запуск шагов."""
         if parallel:
             logger.info(f"Параллельный запуск навыков: {step_names}")
             tasks = [self.skills[name].execute(context.copy()) for name in step_names]
@@ -142,7 +83,7 @@ class AgentOrchestrator:
             for res in results:
                 context["tokens"] = context.get("tokens", 0) + res.get("tokens", 0)
                 context["cost"] = context.get("cost", 0.0) + res.get("cost", 0.0)
-                for key in ["tests", "lectures", "seminars", "slides", "work_programs", "bibliography"]:
+                for key in ["tests", "lectures", "seminars", "slides", "work_programs", "bibliography", "content"]:
                     if key in res: context[key] = res[key]
         else:
             logger.info(f"Последовательный запуск навыков: {step_names}")
@@ -151,6 +92,7 @@ class AgentOrchestrator:
         return context
 
     async def run_generate_pipeline(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        # Шаг 1: Генерация каркаса -> Валидация
         context = await self.run_steps(["curriculum", "validation"], context)
         
         await save_session(
@@ -177,18 +119,10 @@ class AgentOrchestrator:
             "constraints": session.get("constraints"), "tokens": session.get("tokens_used", 0), "cost": session.get("cost_rub", 0.0)
         }
         
-        content_steps = ["tests", "lectures", "seminars", "slides", "work_programs", "bibliography"]
-        context = await self.run_steps(content_steps, context, parallel=True)
-        context = await self.run_steps(["validation"], context)
+        # [НОВАЯ АРХИТЕКТУРА]: Планировщик -> Исполнитель -> Валидация
+        context = await self.run_steps(["planner", "executor", "validation"], context)
         
-        content = {
-            "tests": context.get("tests", []),
-            "lectures": context.get("lectures", []),
-            "seminars": context.get("seminars", []),
-            "slides": context.get("slides", []),
-            "work_programs": context.get("work_programs", []),
-            "bibliography": context.get("bibliography", [])
-        }
+        content = context.get("content", {})
         
         await save_session(
             session_id, context["framework"], "completed", 
@@ -226,10 +160,7 @@ class AgentOrchestrator:
             "analytics": {"tokens_spent": context["tokens"], "cost_rub": round(context["cost"], 2)}
         }
 
-# ==========================================
 # ПУБЛИЧНЫЕ ФУНКЦИИ
-# ==========================================
-
 orchestrator = AgentOrchestrator()
 
 async def clarify_and_classify(topic: str, hours: int = None, reference_text: str = None) -> dict:
@@ -276,10 +207,8 @@ async def process_request(topic: str, hours: int = None, template_type: str = "a
 
         if needs_clarification:
             return {
-                "session_id": session_id,
-                "status": "clarification_needed",
-                "questions": questions,
-                "message": "Не хватает данных для генерации."
+                "session_id": session_id, "status": "clarification_needed",
+                "questions": questions, "message": "Не хватает данных для генерации."
             }
 
         context = {
