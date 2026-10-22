@@ -39,7 +39,6 @@ def auto_correct_hours(framework: Framework, target_hours: int, constraints: str
         framework.total_hours = sum(m.total_hours for m in framework.modules) + framework.final_assessment_hours
         logger.info(f"Автокоррекция часов: модуль '{last_mod.title}' изменен до {new_total} ч.")
         
-    # [ФИКС РЕВЬЮЕРА]: Программная гарантия нормативной опоры
     if "273-ФЗ" not in framework.goal:
         framework.goal += " (Программа разработана в соответствии с 273-ФЗ)."
         
@@ -50,17 +49,15 @@ def auto_correct_hours(framework: Framework, target_hours: int, constraints: str
             framework.goal += " (на основании Приказа Минобрнауки №499)."
     else:
         if framework.prof_standard:
-             framework.prof_standard = None # Для общеразвивающих профстандарт запрещен
+             framework.prof_standard = None
         if "629" not in framework.goal:
             framework.goal += " (на основании Приказа Минпросвещения №629)."
 
     return framework
 
 def enforce_content_constraints(framework: Framework, content: dict, constraints: str = None) -> dict:
-    """[ФИКС РЕВЬЮЕРА]: Защита от выдумывания (Anti-Hallucination)."""
     forbidden_services = ["chatgpt", "openai", "midjourney", "claude", "gemini", "anthropic"]
     
-    # 1. Очистка библиографии
     if isinstance(content.get("bibliography"), list):
         cleaned_bib = []
         for book in content["bibliography"]:
@@ -71,7 +68,6 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
             cleaned_bib.append(book)
         content["bibliography"] = cleaned_bib
 
-    # 2. Замена запрещенных сервисов в текстах лекций, семинаров и программ
     for key in ["lectures", "seminars", "work_programs"]:
         if isinstance(content.get(key), list):
             for item in content[key]:
@@ -81,11 +77,10 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
                             if bad in v.lower():
                                 item[k] = re.sub(f'(?i){bad}', 'GigaChat (российский аналог)', v)
 
-    # 3. Жесткое количество вопросов
     total_hours = framework.total_hours
     expected_q = max(10, total_hours // 24)
     if framework.template_type == "Общеразвивающая":
-        expected_q = 10 # Ловушка для школьников
+        expected_q = 10
         
     if constraints:
         match = re.search(r'(\d+)\s*(вопрос|тест|задани)', constraints.lower())
@@ -98,14 +93,14 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
         elif len(tests) < expected_q:
             for i in range(len(tests), expected_q):
                 tests.append({
-                    "question": f"Дополнительный вопрос {i+1} (автоматически добавлен по объему часов)",
-                    "options": ["Вариант 1", "Вариант 2", "Вариант 3", "Вариант 4"],
-                    "correct_answer": "Вариант 1",
-                    "related_competency": framework.competencies[0].name if framework.competencies else "Общая"
+                    "question": f"ОШИБКА ГЕНЕРАЦИИ. Вопрос {i+1} не был создан.",
+                    "options": ["А", "Б", "В", "Г"],
+                    "correct_answer": "А",
+                    "related_competency": "Ошибка",
+                    "category": "Ошибка"
                 })
             content["tests"] = tests
 
-    # 4. Умная фильтрация слайдов
     if isinstance(content.get("slides"), list):
         if any("pandas" in m.title.lower() for m in framework.modules):
             content["slides"] = [s for s in content["slides"] if "pandas" in s.get("module_title", "").lower() or "pandas" in s.get("slide_title", "").lower()]
@@ -119,7 +114,13 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
     return content
 
 def check_content_constraints(framework: Framework, content: dict, constraints: str = None) -> dict:
+    """
+    [ФИКС РЕВЬЮЕРА]: Пост-валидация контента.
+    Ищет сообщения об ошибках генерации и добавляет их в отчет.
+    """
     errors = []
+    
+    # 1. Проверка количества вопросов
     expected_q = max(10, framework.total_hours // 24)
     if framework.template_type == "Общеразвивающая": expected_q = 10
     if constraints:
@@ -130,6 +131,33 @@ def check_content_constraints(framework: Framework, content: dict, constraints: 
     if actual_q < expected_q:
         errors.append(f"Ожидалось минимум {expected_q} вопросов, сгенерировано {actual_q}.")
 
+    # 2. Проверка на наличие ошибок генерации (наши новые заглушки)
+    error_pattern = "ОШИБКА ГЕНЕРАЦИИ"
+    
+    for test in content.get("tests", []):
+        if error_pattern in test.get("question", ""):
+            errors.append(f"Сбой при генерации тестового вопроса.")
+            break
+
+    for sem in content.get("seminars", []):
+        if error_pattern in sem.get("task", ""):
+            errors.append(f"Сбой при генерации семинара для модуля '{sem.get('module_title')}'.")
+            break
+            
+    for lec in content.get("lectures", []):
+        if any(error_pattern in thesis for thesis in lec.get("theses", [])):
+            errors.append(f"Сбой при генерации лекции для модуля '{lec.get('module_title')}'.")
+            break
+
+    for wp in content.get("work_programs", []):
+        if error_pattern in wp.get("description", ""):
+            errors.append(f"Сбой при генерации рабочей программы для модуля '{wp.get('module_title')}'.")
+            break
+            
+    if any(error_pattern in book for book in content.get("bibliography", [])):
+        errors.append("Сбой при генерации списка литературы.")
+
+    # 3. Проверка запрещенных сервисов
     forbidden = ["chatgpt", "midjourney", "openai"]
     for book in content.get("bibliography", []):
         if any(b in book.lower() for b in forbidden) and "ЗАПРЕЩЕННЫЙ СЕРВИС" not in book:

@@ -165,18 +165,18 @@ async def get_validation_report(session_id: str):
         coverage = validate_coverage_with_content(session["framework"], session["content"])
         base_report["deep_coverage"] = coverage
         
-        # 2. Проверка ограничений
+        # 2. Проверка ограничений (включая ошибки генерации)
         c_check = check_content_constraints(session["framework"], session["content"], session.get("constraints"))
         base_report["constraints_check"] = c_check
         
         # 3. Проверка полноты разделов
         completeness = {
-            "has_tests": len(session["content"].get("tests", [])) > 0,
-            "has_lectures": len(session["content"].get("lectures", [])) > 0,
-            "has_seminars": len(session["content"].get("seminars", [])) > 0,
+            "has_tests": len(session["content"].get("tests", [])) > 0 and "ОШИБКА ГЕНЕРАЦИИ" not in session["content"]["tests"][0].get("question", ""),
+            "has_lectures": len(session["content"].get("lectures", [])) > 0 and "ОШИБКА ГЕНЕРАЦИИ" not in session["content"]["lectures"][0].get("theses", [""])[0],
+            "has_seminars": len(session["content"].get("seminars", [])) > 0 and "ОШИБКА ГЕНЕРАЦИИ" not in session["content"]["seminars"][0].get("task", ""),
             "has_slides": len(session["content"].get("slides", [])) > 0,
-            "has_work_programs": len(session["content"].get("work_programs", [])) > 0,
-            "has_bibliography": len(session["content"].get("bibliography", [])) > 0
+            "has_work_programs": len(session["content"].get("work_programs", [])) > 0 and "ОШИБКА ГЕНЕРАЦИИ" not in session["content"]["work_programs"][0].get("description", ""),
+            "has_bibliography": len(session["content"].get("bibliography", [])) > 0 and "ОШИБКА ГЕНЕРАЦИИ" not in session["content"]["bibliography"][0]
         }
         completeness["all_sections_present"] = all(completeness.values())
         base_report["completeness_check"] = completeness
