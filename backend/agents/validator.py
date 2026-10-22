@@ -1,5 +1,5 @@
-from schemas import Framework, Module
 import re
+from schemas import Framework, Module
 from logger import logger
 
 def adjust_module_hours(mod: Module, new_total: int):
@@ -21,6 +21,7 @@ def auto_correct_hours(framework: Framework, target_hours: int, constraints: str
     if not framework.modules:
         return framework
 
+    # Учет жестких ограничений (например, для DevOps без лекций)
     if constraints:
         cons_lower = constraints.lower()
         if "без лекций" in cons_lower or "без аудиторных" in cons_lower or "только самостоятельная" in cons_lower:
@@ -30,6 +31,7 @@ def auto_correct_hours(framework: Framework, target_hours: int, constraints: str
                 mod.labs = 0
                 mod.srs = mod.total_hours
 
+    # Проверка арифметики
     current_sum = sum(module.total_hours for module in framework.modules) + framework.final_assessment_hours
     diff = target_hours - current_sum
     
@@ -41,6 +43,7 @@ def auto_correct_hours(framework: Framework, target_hours: int, constraints: str
         framework.total_hours = sum(m.total_hours for m in framework.modules) + framework.final_assessment_hours
         logger.info(f"Автокоррекция часов: модуль '{last_mod.title}' изменен до {new_total} ч.")
         
+    # [ФИКС]: Жесткая привязка нормативной базы в зависимости от template_type
     if "273-ФЗ" not in framework.goal:
         framework.goal += " (Программа разработана в соответствии с 273-ФЗ)."
         
@@ -61,6 +64,7 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
     """[ФИКС РЕВЬЮЕРА]: Защита от выдумывания (Anti-Hallucination)."""
     forbidden_services = ["chatgpt", "openai", "midjourney", "claude", "gemini", "anthropic"]
     
+    # 1. Очистка библиографии
     if isinstance(content.get("bibliography"), list):
         cleaned_bib = []
         for book in content["bibliography"]:
@@ -71,6 +75,7 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
             cleaned_bib.append(book)
         content["bibliography"] = cleaned_bib
 
+    # 2. Замена запрещенных сервисов в текстах
     for key in ["lectures", "seminars", "work_programs"]:
         if isinstance(content.get(key), list):
             for item in content[key]:
@@ -80,7 +85,7 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
                             if bad in v.lower():
                                 item[k] = re.sub(f'(?i){bad}', 'GigaChat (российский аналог)', v)
 
-    # Проверка количества вопросов
+    # 3. Жесткое количество вопросов
     total_hours = framework.total_hours
     expected_q = max(10, total_hours // 24)
     if framework.template_type == "Общеразвивающая":
@@ -105,7 +110,7 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
                 })
             content["tests"] = tests
 
-    # Фильтрация слайдов
+    # 4. Фильтрация слайдов
     if isinstance(content.get("slides"), list):
         if any("pandas" in m.title.lower() for m in framework.modules):
             content["slides"] = [s for s in content["slides"] if "pandas" in s.get("module_title", "").lower() or "pandas" in s.get("slide_title", "").lower()]
@@ -119,14 +124,10 @@ def enforce_content_constraints(framework: Framework, content: dict, constraints
     return content
 
 def check_content_constraints(framework: Framework, content: dict, constraints: str = None) -> dict:
-    """
-    [ФИКС РЕВЬЮЕРА]: Пост-валидация контента.
-    Ищет сообщения об ошибках генерации и добавляет их в отчет.
-    """
+    """[ФИКС РЕВЬЮЕРА]: Пост-валидация контента (поиск ошибок генерации)."""
     errors = []
     error_pattern = "ОШИБКА ГЕНЕРАЦИИ"
     
-    # 1. Проверка тестов
     expected_q = max(10, framework.total_hours // 24)
     if framework.template_type == "Общеразвивающая": expected_q = 10
     if constraints:
@@ -140,25 +141,20 @@ def check_content_constraints(framework: Framework, content: dict, constraints: 
     if any(error_pattern in t.get("question", "") for t in content.get("tests", [])):
         errors.append("Сбой при генерации тестовых вопросов.")
 
-    # 2. Проверка семинаров
     if any(error_pattern in s.get("task", "") for s in content.get("seminars", [])):
         errors.append("Сбой при генерации семинаров.")
 
-    # 3. Проверка лекций
     for lec in content.get("lectures", []):
         if any(error_pattern in thesis for thesis in lec.get("theses", [])):
             errors.append(f"Сбой при генерации лекции для модуля '{lec.get('module_title')}'.")
             break
 
-    # 4. Проверка рабочих программ
     if any(error_pattern in wp.get("description", "") for wp in content.get("work_programs", [])):
         errors.append("Сбой при генерации рабочих программ.")
 
-    # 5. Проверка библиографии
     if any(error_pattern in book for book in content.get("bibliography", [])):
         errors.append("Сбой при генерации списка литературы.")
 
-    # 6. Проверка запрещенных сервисов
     forbidden = ["chatgpt", "midjourney", "openai"]
     for book in content.get("bibliography", []):
         if any(b in book.lower() for b in forbidden) and "ЗАПРЕЩЕННЫЙ СЕРВИС" not in book:
@@ -194,7 +190,7 @@ def validate_coverage_with_content(framework: Framework, content: dict) -> dict:
     }
 
 def run_full_validation(framework: Framework) -> dict:
-    """[ТРЕБОВАНИЕ КЕЙСА]: Валидация каркаса (математика и нормативы)."""
+    """[ТРЕБОВАНИЕ КЕЙСА]: Валидация каркаса."""
     calculated_total = sum(module.total_hours for module in framework.modules) + framework.final_assessment_hours
     hours_match = calculated_total == framework.total_hours
     

@@ -11,9 +11,6 @@ from logger import logger
 MAX_CONCURRENT_REQUESTS = config.MAX_CONCURRENT_REQUESTS
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-# ==========================================
-# [УТИЛИТЫ]: Вспомогательные функции
-# ==========================================
 
 def clean_text_field(text: any) -> str:
     """
@@ -67,9 +64,7 @@ def validate_seminar_format(data: list) -> list:
             })
     return valid_seminars
 
-# ==========================================
-# [УРОВЕНЬ 2]: Fallback-сообщения об ошибках
-# ==========================================
+
 
 def _rule_based_fallback_seminar(framework: Framework, mod_title: str, mod_hours: int) -> dict:
     logger.warning(f"Сбой генерации семинара для модуля '{mod_title}'.")
