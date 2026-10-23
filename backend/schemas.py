@@ -63,15 +63,17 @@ class ContentPack(BaseModel):
 class SubTask(BaseModel):
     target_key: str
     prompt: str
+    # [ФИКС]: Убрали строгий Literal, чтобы можно было передавать "text" или "json_array"
     expected_format: str = "json_array"
-    # [ФИКС]: Добавили название модуля, чтобы привязать текстовый ответ к нему
-    module_title: str = "Общий" 
+    # [ФИКС]: Добавили module_title для привязки ответа к модулю
+    module_title: str = "Общий"
 
 class ExecutionPlan(BaseModel):
     reasoning: str
     tasks: List[SubTask]
 
 class GenerateRequest(BaseModel):
+    # [ФИКС]: Разрешаем темы от 2 символов (ML, AI, Go)
     topic: str = Field(..., min_length=2, max_length=100)
     hours: Optional[int] = Field(default=None, ge=16, le=500)
     template_type: Optional[Literal["ДПО", "Общеразвивающая", "auto"]] = Field(default="auto")
